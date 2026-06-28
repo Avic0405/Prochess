@@ -1,0 +1,304 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum GameStatus {
+  WAITING
+  PAYMENT_PENDING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ABANDONED
+  DISPUTED
+}
+
+enum GameType {
+  FREE
+  PAID
+}
+
+enum GameResult {
+  WHITE_WINS
+  BLACK_WINS
+  DRAW
+  ABANDONED
+}
+
+enum TimeControl {
+  BULLET
+  BLITZ
+  RAPID
+  CLASSICAL
+  CUSTOM
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  GAME_STAKE
+  GAME_WIN
+  GAME_REFUND
+  COMMISSION
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum FriendRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum NotificationType {
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  GAME_INVITE
+  GAME_STARTED
+  GAME_RESULT
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  SYSTEM
+}
+
+enum Currency {
+  USD
+  INR
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  username      String    @unique
+  passwordHash  String?
+  avatar        String?
+  rating        Int       @default(1200)
+  gamesPlayed   Int       @default(0)
+  wins          Int       @default(0)
+  losses        Int       @default(0)
+  draws         Int       @default(0)
+  isVerified    Boolean   @default(false)
+  isOnline      Boolean   @default(false)
+  isBanned      Boolean   @default(false)
+  role          Role      @default(USER)
+  region        Currency  @default(USD)
+
+  // OAuth
+  googleId      String?   @unique
+  facebookId    String?   @unique
+
+  // Tokens (hashed)
+  refreshTokenHash      String?
+  verificationToken     String?
+  verificationTokenExpiry DateTime?
+  passwordResetToken    String?
+  passwordResetExpiry   DateTime?
+
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSeenAt    DateTime  @default(now())
+
+  // Relations
+  wallet             Wallet?
+  gamesAsWhite       Game[]          @relation("WhitePlayer")
+  gamesAsBlack       Game[]          @relation("BlackPlayer")
+  sentRequests       FriendRequest[] @relation("Sender")
+  receivedRequests   FriendRequest[] @relation("Receiver")
+  friends            Friendship[]    @relation("FriendA")
+  friendOf           Friendship[]    @relation("FriendB")
+  notifications      Notification[]
+  sentMessages       ChatMessage[]   @relation("MessageSender")
+  ratingHistory      RatingHistory[]
+  matchmakingEntry   MatchmakingQueue?
+
+  @@index([username])
+  @@index([email])
+  @@index([rating])
+}
+
+model Friendship {
+  id        String   @id @default(cuid())
+  userAId   String
+  userBId   String
+  userA     User     @relation("FriendA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("FriendB", fields: [userBId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userAId, userBId])
+}
+
+model FriendRequest {
+  id         String              @id @default(cuid())
+  senderId   String
+  receiverId String
+  sender     User                @relation("Sender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User                @relation("Receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     FriendRequestStatus @default(PENDING)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId])
+}
+
+model Wallet {
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance      Decimal       @default(0)
+  lockedBalance Decimal      @default(0)
+  currency     Currency      @default(USD)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+}
+
+model Transaction {
+  id             String            @id @default(cuid())
+  walletId       String
+  wallet         Wallet            @relation(fields: [walletId], references: [id])
+  amount         Decimal
+  type           TransactionType
+  status         TransactionStatus @default(PENDING)
+  gatewayRef     String?           @unique // Payment gateway reference
+  gatewayPayload Json?
+  description    String?
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  gameId         String?
+  game           Game?             @relation(fields: [gameId], references: [id])
+
+  @@index([walletId])
+  @@index([gameId])
+  @@index([gatewayRef])
+}
+
+model Game {
+  id              String      @id @default(cuid())
+  whitePlayerId   String
+  blackPlayerId   String
+  whitePlayer     User        @relation("WhitePlayer", fields: [whitePlayerId], references: [id])
+  blackPlayer     User        @relation("BlackPlayer", fields: [blackPlayerId], references: [id])
+  status          GameStatus  @default(WAITING)
+  type            GameType    @default(FREE)
+  timeControlType TimeControl @default(BLITZ)
+  timeMinutes     Int         @default(10)
+  increment       Int         @default(0) // seconds
+  stake           Decimal?
+  currency        Currency?
+  pgn             String?
+  fen             String?     // Current board position
+  result          GameResult?
+  winnerId        String?
+  whiteTimeLeft   Int         @default(600) // seconds
+  blackTimeLeft   Int         @default(600) // seconds
+  currentTurn     String      @default("w") // "w" or "b"
+  moveCount       Int         @default(0)
+  escrowHeld      Boolean     @default(false)
+  whiteAccepted   Boolean     @default(false)
+  blackAccepted   Boolean     @default(false)
+  whitePaid       Boolean     @default(false)
+  blackPaid       Boolean     @default(false)
+  lastMoveAt      DateTime?
+  moves           Move[]
+  transactions    Transaction[]
+  chatMessages    ChatMessage[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  startedAt       DateTime?
+  endedAt         DateTime?
+
+  @@index([whitePlayerId])
+  @@index([blackPlayerId])
+  @@index([status])
+  @@index([type])
+}
+
+model Move {
+  id        String   @id @default(cuid())
+  gameId    String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  moveNum   Int
+  san       String   // Standard Algebraic Notation e.g. "e4"
+  uci       String   // UCI format e.g. "e2e4"
+  fen       String   // Position after move
+  timeTaken Int      @default(0) // milliseconds
+  createdAt DateTime @default(now())
+
+  @@index([gameId])
+}
+
+model MatchmakingQueue {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameType    GameType
+  stake       Decimal?
+  currency    Currency?
+  ratingMin   Int
+  ratingMax   Int
+  timeControl TimeControl @default(BLITZ)
+  timeMinutes Int      @default(10)
+  increment   Int      @default(0)
+  joinedAt    DateTime @default(now())
+
+  @@index([gameType, stake, currency])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  gameId    String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User     @relation("MessageSender", fields: [senderId], references: [id])
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([gameId])
+}
+
+model RatingHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  change    Int
+  gameId    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}

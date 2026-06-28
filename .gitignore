@@ -1,0 +1,119 @@
+# ─────────────────────────────────────────────
+#  ProChess — .gitignore
+# ─────────────────────────────────────────────
+
+# ── Dependencies ──────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Build outputs ─────────────────────────────
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.vercel/
+.netlify/
+
+# ── Coverage ──────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+
+# ── Environment / Secrets ─────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.cert
+
+# ── Logs ──────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── Runtime / Temp ────────────────────────────
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+.temp/
+
+# ── Turbo ─────────────────────────────────────
+.turbo/
+
+# ── Prisma ────────────────────────────────────
+# Keep schema & migrations, ignore generated client & SQLite DB
+apps/backend/src/generated/
+apps/backend/prisma/dev.db
+apps/backend/prisma/dev.db-journal
+apps/backend/prisma/*.db
+apps/backend/prisma/*.db-journal
+
+# ── Uploads (user-generated content) ──────────
+# Root uploads dir
+uploads/*
+!uploads/.gitkeep
+# Backend uploads dir
+apps/backend/uploads/*
+!apps/backend/uploads/.gitkeep
+
+# ── Compiled seed / test JS artefacts ─────────
+apps/backend/prisma/seed.js
+apps/backend/prisma/seed.js.map
+apps/backend/prisma/seed.d.ts
+apps/backend/test/*.js
+apps/backend/test/*.js.map
+apps/backend/test/*.d.ts
+
+# ── OS generated ──────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Editors / IDEs ────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.iml
+
+# ── Testing ───────────────────────────────────
+playwright-report/
+test-results/
+e2e_chess_test.cjs
+
+# ── Docker ────────────────────────────────────
+# docker-compose files are committed; ignore override
+docker-compose.override.yml
+
+# ── Misc ──────────────────────────────────────
+*.zip
+*.tar.gz
+*.gz
+.eslintcache
+.stylelintcache
+tsconfig.tsbuildinfo

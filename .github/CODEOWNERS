@@ -1,0 +1,18 @@
+# CODEOWNERS — Define code owners for automatic review assignment.
+# Format: <file pattern>   <GitHub username(s)>
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repository
+*                             @Avic0405
+
+# Backend
+apps/backend/                 @Avic0405
+apps/backend/prisma/          @Avic0405
+
+# Frontend
+apps/frontend/                @Avic0405
+
+# CI/CD and infrastructure
+.github/                      @Avic0405
+docker/                       @Avic0405
+docker-compose*.yml           @Avic0405
