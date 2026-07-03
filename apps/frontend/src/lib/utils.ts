@@ -12,7 +12,7 @@ export function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function formatCurrency(amount: number | string, currency: 'USD' | 'INR'): string {
+export function formatCurrency(amount: number | string, currency: string): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   return new Intl.NumberFormat('en', {
     style: 'currency',

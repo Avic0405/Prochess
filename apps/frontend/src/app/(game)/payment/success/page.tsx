@@ -13,10 +13,11 @@ export default function PaymentSuccessPage() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    // Invalidate wallet balance cache so dashboard shows updated balance
-    queryClient.invalidateQueries({ queryKey: ['my-stats'] });
+    queryClient.invalidateQueries({ queryKey: ['wallets'] });
     queryClient.invalidateQueries({ queryKey: ['wallet-balance'] });
-  }, []);
+    queryClient.invalidateQueries({ queryKey: ['wallet-transactions'] });
+    queryClient.invalidateQueries({ queryKey: ['my-stats'] });
+  }, [queryClient]);
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">

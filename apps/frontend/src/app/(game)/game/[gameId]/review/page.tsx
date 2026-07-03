@@ -162,7 +162,7 @@ export default function ReviewPage() {
 
     // Build move text with soft line wrapping at 80 chars
     const tokens: string[] = [];
-    moves.forEach((m, i) => {
+    moves.forEach((m: any, i: number) => {
       if (i % 2 === 0) tokens.push(`${Math.floor(i / 2) + 1}.`);
       tokens.push(m.san);
     });

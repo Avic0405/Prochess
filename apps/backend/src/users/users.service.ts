@@ -17,7 +17,7 @@ export class UsersService {
     private notifications: NotificationsService,
   ) {}
 
-  async getProfile(username: string) {
+  async getProfile(username: string, currentUserId?: string) {
     const user = await this.prisma.user.findUnique({
       where: { username },
       select: {
@@ -61,7 +61,44 @@ export class UsersService {
     });
 
     if (!user) throw new NotFoundException('User not found');
-    return user;
+
+    if (!currentUserId || currentUserId === user.id) {
+      return { ...user, friendStatus: 'SELF' };
+    }
+
+    const [friendship, pendingRequest] = await Promise.all([
+      this.prisma.friendship.findFirst({
+        where: {
+          OR: [
+            { userAId: currentUserId, userBId: user.id },
+            { userAId: user.id, userBId: currentUserId },
+          ],
+        },
+      }),
+      this.prisma.friendRequest.findFirst({
+        where: {
+          status: 'PENDING',
+          OR: [
+            { senderId: currentUserId, receiverId: user.id },
+            { senderId: user.id, receiverId: currentUserId },
+          ],
+        },
+        select: { senderId: true },
+      }),
+    ]);
+
+    let friendStatus: string;
+    if (friendship) {
+      friendStatus = 'FRIENDS';
+    } else if (pendingRequest) {
+      friendStatus = pendingRequest.senderId === currentUserId
+        ? 'PENDING_SENT'
+        : 'PENDING_RECEIVED';
+    } else {
+      friendStatus = 'NONE';
+    }
+
+    return { ...user, friendStatus };
   }
 
   async getMyProfile(userId: string) {
@@ -81,22 +118,26 @@ export class UsersService {
         region: true,
         role: true,
         createdAt: true,
-        wallet: {
-          select: { balance: true, lockedBalance: true, currency: true },
+        wallets: {
+          select: { id: true, balance: true, lockedBalance: true, currency: true, isActive: true },
+          orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
         },
       },
     });
 
     if (!user) throw new NotFoundException('User not found');
+
+    const wallets = user.wallets.map((w) => ({
+      ...w,
+      balance: Number(w.balance),
+      lockedBalance: Number(w.lockedBalance),
+    }));
+
     return {
       ...user,
-      wallet: user.wallet
-        ? {
-            ...user.wallet,
-            balance: Number(user.wallet.balance),
-            lockedBalance: Number(user.wallet.lockedBalance),
-          }
-        : null,
+      wallets,
+      // keep wallet (singular) for backward compat — the active one
+      wallet: wallets.find((w) => w.isActive) ?? wallets[0] ?? null,
     };
   }
 
@@ -144,7 +185,7 @@ export class UsersService {
   }
 
   async searchUsers(query: string, currentUserId: string) {
-    return this.prisma.user.findMany({
+    const users = await this.prisma.user.findMany({
       where: {
         username: { contains: query },
         NOT: { id: currentUserId },
@@ -155,6 +196,59 @@ export class UsersService {
       },
       take: 20,
     });
+
+    if (users.length === 0) return [];
+
+    const userIds = users.map((u) => u.id);
+
+    const [friendships, pendingRequests] = await Promise.all([
+      this.prisma.friendship.findMany({
+        where: {
+          OR: [
+            { userAId: currentUserId, userBId: { in: userIds } },
+            { userBId: currentUserId, userAId: { in: userIds } },
+          ],
+        },
+        select: { userAId: true, userBId: true },
+      }),
+      this.prisma.friendRequest.findMany({
+        where: {
+          status: 'PENDING',
+          OR: [
+            { senderId: currentUserId, receiverId: { in: userIds } },
+            { receiverId: currentUserId, senderId: { in: userIds } },
+          ],
+        },
+        select: { senderId: true, receiverId: true },
+      }),
+    ]);
+
+    const friendSet = new Set(
+      friendships.map((f) =>
+        f.userAId === currentUserId ? f.userBId : f.userAId,
+      ),
+    );
+    const sentSet = new Set(
+      pendingRequests
+        .filter((r) => r.senderId === currentUserId)
+        .map((r) => r.receiverId),
+    );
+    const receivedSet = new Set(
+      pendingRequests
+        .filter((r) => r.receiverId === currentUserId)
+        .map((r) => r.senderId),
+    );
+
+    return users.map((u) => ({
+      ...u,
+      friendStatus: friendSet.has(u.id)
+        ? 'FRIENDS'
+        : sentSet.has(u.id)
+          ? 'PENDING_SENT'
+          : receivedSet.has(u.id)
+            ? 'PENDING_RECEIVED'
+            : 'NONE',
+    }));
   }
 
   async sendFriendRequest(senderId: string, receiverId: string) {

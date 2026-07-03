@@ -7,6 +7,7 @@ import { InviteToast } from '@/components/chess/InviteToast';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
+    useAuthStore.persist.rehydrate();
     if (Cookies.get('accessToken')) {
       useAuthStore.getState().fetchMe();
     }

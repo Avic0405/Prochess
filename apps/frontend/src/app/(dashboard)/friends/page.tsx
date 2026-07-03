@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/hooks/useToast';
 import { PublicUser, FriendRequest } from '@/types';
-import { UserPlus, Search, Check, X, Swords, User } from 'lucide-react';
+import { UserPlus, Search, Check, X, Swords, User, Users, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export default function FriendsPage() {
@@ -56,7 +56,10 @@ export default function FriendsPage() {
   const sendRequestMutation = useMutation({
     mutationFn: (userId: string) =>
       api.post(`/users/friends/request/${userId}`),
-    onSuccess: () => toast({ title: 'Friend request sent!' }),
+    onSuccess: () => {
+      toast({ title: 'Friend request sent!' });
+      queryClient.invalidateQueries({ queryKey: ['user-search'] });
+    },
     onError: (e: any) =>
       toast({ variant: 'destructive', title: e?.response?.data?.message ?? 'Error' }),
   });
@@ -189,15 +192,35 @@ export default function FriendsPage() {
                     <p className="text-xs text-muted-foreground">{u.rating} ELO</p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => sendRequestMutation.mutate(u.id)}
-                  disabled={sendRequestMutation.isPending}
-                  className="gap-1"
-                >
-                  <UserPlus className="w-3 h-3" /> Add
-                </Button>
+                {u.friendStatus === 'FRIENDS' ? (
+                  <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 px-2 py-1 bg-green-500/10 rounded-lg">
+                    <Users className="w-3 h-3" /> Friends
+                  </span>
+                ) : u.friendStatus === 'PENDING_SENT' ? (
+                  <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground px-2 py-1 bg-muted rounded-lg">
+                    <Clock className="w-3 h-3" /> Pending
+                  </span>
+                ) : u.friendStatus === 'PENDING_RECEIVED' ? (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('requests');
+                    }}
+                    className="gap-1"
+                  >
+                    <Check className="w-3 h-3" /> Accept
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => sendRequestMutation.mutate(u.id)}
+                    disabled={sendRequestMutation.isPending}
+                    className="gap-1"
+                  >
+                    <UserPlus className="w-3 h-3" /> Add
+                  </Button>
+                )}
               </div>
             ))}
           </div>

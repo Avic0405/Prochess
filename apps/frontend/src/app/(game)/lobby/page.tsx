@@ -2,14 +2,17 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/store/authStore';
 import { getMatchmakingSocket } from '@/lib/socket';
 import Cookies from 'js-cookie';
+import api from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { cn } from '@/lib/utils';
-import { Swords, DollarSign, Clock, Zap, Search, X, UserCheck } from 'lucide-react';
+import { cn, formatCurrency } from '@/lib/utils';
+import { Swords, DollarSign, Clock, Zap, Search, X, UserCheck, ChevronDown } from 'lucide-react';
 import { toast } from '@/hooks/useToast';
+import { Currency } from '@/types';
 
 const TIME_CONTROLS = [
   { label: 'Bullet', value: 1, increment: 0, icon: Zap },
@@ -37,6 +40,18 @@ export default function LobbyPage() {
   const [status, setStatus] = useState<MatchStatus>('idle');
   const [searchTime, setSearchTime] = useState(0);
   const [activeInviteId, setActiveInviteId] = useState<string | null>(null);
+  const [selectedCurrency, setSelectedCurrency] = useState<Currency | null>(null);
+
+  const { data: wallets = [] } = useQuery<any[]>({
+    queryKey: ['wallets'],
+    queryFn: () => api.get('/wallet').then((r) => r.data),
+    enabled: !!user,
+  });
+
+  // Derive active currency from wallets (or user region as fallback)
+  const activeWallet = wallets.find((w) => w.isActive) ?? wallets[0];
+  const activeCurrency: Currency = selectedCurrency ?? activeWallet?.currency ?? (user?.region as Currency) ?? 'USD';
+  const activeCurrencyWallet = wallets.find((w) => w.currency === activeCurrency);
 
   useEffect(() => {
     if (!isAuthenticated) router.push('/login');
@@ -59,12 +74,19 @@ export default function LobbyPage() {
     if (!token || !user) return null;
     const socket = getMatchmakingSocket(token);
 
+    // Remove stale listeners before re-attaching to prevent duplicates
+    socket.off('match_found');
+    socket.off('invite_accepted');
+    socket.off('invite_sent');
+    socket.off('invite_declined');
+    socket.off('invite_expired');
+    socket.off('exception');
+
     socket.on('match_found', (data: { game: { id: string } }) => {
       setStatus('found');
       setTimeout(() => router.push(`/game/${data.game.id}`), 1500);
     });
 
-    // invite accepted: server sends match_found to both players
     socket.on('invite_accepted', (data: { game: { id: string } }) => {
       setStatus('found');
       setTimeout(() => router.push(`/game/${data.game.id}`), 1500);
@@ -86,8 +108,23 @@ export default function LobbyPage() {
       toast({ title: 'Challenge expired', description: `${inviteTargetName} did not respond in time.` });
     });
 
+    // Server-side validation errors (insufficient balance, wallet not active, etc.)
+    socket.on('exception', (err: { message?: string; status?: string }) => {
+      setStatus('idle');
+      setActiveInviteId(null);
+      const msg = err?.message ?? 'Something went wrong. Please try again.';
+      toast({ title: 'Cannot join queue', description: msg, variant: 'destructive' });
+    });
+
     return socket;
   }, [user, router]);
+
+  const CURRENCY_SYMBOLS: Record<Currency, string> = {
+    USD: '$', INR: '₹', EUR: '€', GBP: '£',
+  };
+  const CURRENCY_FLAGS: Record<Currency, string> = {
+    USD: '🇺🇸', INR: '🇮🇳', EUR: '🇪🇺', GBP: '🇬🇧',
+  };
 
   const buildOptions = () => {
     const options: Record<string, unknown> = {
@@ -97,17 +134,33 @@ export default function LobbyPage() {
     };
     if (gameType === 'PAID') {
       options.stake = parseFloat(stake);
-      options.currency = user?.region;
+      options.currency = activeCurrency;
     }
     return options;
   };
 
+  const validatePaid = (): boolean => {
+    if (gameType !== 'PAID') return true;
+    const stakeNum = parseFloat(stake);
+    if (!stake || stakeNum <= 0) {
+      toast({ title: 'Enter a valid stake amount', variant: 'destructive' });
+      return false;
+    }
+    const walletBalance = Number(activeCurrencyWallet?.balance ?? 0);
+    if (walletBalance < stakeNum) {
+      toast({
+        title: 'Insufficient balance',
+        description: `Your ${activeCurrency} wallet has ${formatCurrency(walletBalance, activeCurrency)}. Need ${formatCurrency(stakeNum, activeCurrency)}. Add funds first.`,
+        variant: 'destructive',
+      });
+      return false;
+    }
+    return true;
+  };
+
   const startSearch = () => {
     if (!user) return;
-    if (gameType === 'PAID' && (!stake || parseFloat(stake) <= 0)) {
-      toast({ title: 'Enter a valid stake amount', description: 'Add a stake to continue.', variant: 'destructive' });
-      return;
-    }
+    if (!validatePaid()) return;
 
     const socket = getSocket();
     if (!socket) return;
@@ -118,10 +171,7 @@ export default function LobbyPage() {
 
   const sendInvite = () => {
     if (!user || !inviteUserId) return;
-    if (gameType === 'PAID' && (!stake || parseFloat(stake) <= 0)) {
-      toast({ title: 'Enter a valid stake amount', description: 'Add a stake to continue.', variant: 'destructive' });
-      return;
-    }
+    if (!validatePaid()) return;
 
     const socket = getSocket();
     if (!socket) return;
@@ -221,27 +271,63 @@ export default function LobbyPage() {
 
         {/* Stake amount (paid only) */}
         {gameType === 'PAID' && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium">
-              Stake ({user.region === 'INR' ? '₹' : '$'})
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                {user.region === 'INR' ? '₹' : '$'}
-              </span>
-              <Input
-                type="number"
-                placeholder={user.region === 'INR' ? 'e.g. 100' : 'e.g. 5'}
-                value={stake}
-                onChange={(e) => setStake(e.target.value)}
-                className="pl-8"
-                min={user.region === 'INR' ? 50 : 1}
-              />
+          <div className="space-y-3">
+            {/* Currency selector */}
+            {wallets.length > 1 && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Wallet Currency</label>
+                <div className="flex flex-wrap gap-2">
+                  {wallets.map((w) => (
+                    <button
+                      key={w.currency}
+                      onClick={() => setSelectedCurrency(w.currency)}
+                      className={cn(
+                        'flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-all',
+                        activeCurrency === w.currency
+                          ? 'border-primary bg-primary/10 text-foreground font-medium'
+                          : 'border-border text-muted-foreground hover:border-primary/50',
+                      )}
+                    >
+                      {CURRENCY_FLAGS[w.currency as Currency]} {w.currency}
+                      {w.isActive && <span className="text-xs text-primary">(active)</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Stake input */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">
+                Entry Fee ({CURRENCY_FLAGS[activeCurrency]} {activeCurrency})
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                  {CURRENCY_SYMBOLS[activeCurrency]}
+                </span>
+                <Input
+                  type="number"
+                  placeholder={activeCurrency === 'INR' ? 'e.g. 100' : 'e.g. 5'}
+                  value={stake}
+                  onChange={(e) => setStake(e.target.value)}
+                  className="pl-8"
+                  min={activeCurrency === 'INR' ? 50 : 1}
+                  step="0.01"
+                />
+              </div>
+              {(() => {
+                const bal = Number(activeCurrencyWallet?.balance ?? 0);
+                const stakeNum = parseFloat(stake || '0');
+                const insufficient = stakeNum > 0 && bal < stakeNum;
+                return (
+                  <p className={cn('text-xs', insufficient ? 'text-destructive font-medium' : 'text-muted-foreground')}>
+                    {CURRENCY_FLAGS[activeCurrency]} {activeCurrency} Wallet:{' '}
+                    {formatCurrency(bal, activeCurrency)} available
+                    {insufficient && ' — insufficient balance'}
+                  </p>
+                );
+              })()}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Wallet: {user.region === 'INR' ? '₹' : '$'}
-              {Number(user.wallet?.balance ?? 0).toFixed(2)} available
-            </p>
           </div>
         )}
 
@@ -251,6 +337,7 @@ export default function LobbyPage() {
             onClick={isInviteMode ? sendInvite : startSearch}
             className="w-full"
             size="lg"
+            disabled={gameType === 'PAID' && parseFloat(stake || '0') > Number(activeCurrencyWallet?.balance ?? 0)}
           >
             {isInviteMode ? (
               <>

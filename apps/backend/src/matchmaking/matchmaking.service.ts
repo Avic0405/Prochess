@@ -52,7 +52,7 @@ export class MatchmakingService {
   ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, rating: true, wallet: true },
+      select: { id: true, username: true, rating: true },
     });
     if (!user) throw new BadRequestException('User not found');
 
@@ -60,13 +60,23 @@ export class MatchmakingService {
     const existing = await this.prisma.matchmakingQueue.findUnique({ where: { userId } });
     if (existing) throw new BadRequestException('Already in matchmaking queue');
 
-    // For paid matches, verify balance
+    // For paid matches, verify active wallet currency and balance
     if (options.gameType === 'PAID') {
       if (!options.stake || options.stake <= 0) {
         throw new BadRequestException('Stake amount required for paid matches');
       }
-      const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-      if (!wallet || Number(wallet.balance) < options.stake) {
+      if (!options.currency) {
+        throw new BadRequestException('Currency is required for paid matches');
+      }
+      const wallet = await this.prisma.wallet.findFirst({
+        where: { userId, currency: options.currency as any, isActive: true },
+      });
+      if (!wallet) {
+        throw new BadRequestException(
+          `Your active wallet is not set to ${options.currency}. Switch your active wallet first.`,
+        );
+      }
+      if (Number(wallet.balance) < options.stake) {
         throw new BadRequestException('Insufficient wallet balance');
       }
     }
@@ -208,6 +218,39 @@ export class MatchmakingService {
     };
 
     if (invite.inviteeId !== userId) throw new BadRequestException('Not your invite');
+
+    // For paid invites: validate BOTH players have a wallet in the invite currency
+    if (invite.options.gameType === 'PAID' && invite.options.stake) {
+      const inviteCurrency = (invite.options.currency as Currency) ?? Currency.USD;
+
+      const [inviterWallet, inviteeWallet] = await Promise.all([
+        this.prisma.wallet.findFirst({
+          where: { userId: invite.inviterId, currency: inviteCurrency },
+        }),
+        this.prisma.wallet.findFirst({
+          where: { userId: invite.inviteeId, currency: inviteCurrency },
+        }),
+      ]);
+
+      if (!inviterWallet) {
+        throw new BadRequestException(
+          `The challenger does not have a ${inviteCurrency} wallet`,
+        );
+      }
+      if (!inviteeWallet) {
+        throw new BadRequestException(
+          `Both players must use the same active wallet currency to play a paid match. ` +
+          `You don't have a ${inviteCurrency} wallet. Switch your active wallet or ask the challenger to use a different currency.`,
+        );
+      }
+      if (Number(inviterWallet.balance) < invite.options.stake) {
+        throw new BadRequestException('Challenger has insufficient balance');
+      }
+      if (Number(inviteeWallet.balance) < invite.options.stake) {
+        throw new BadRequestException('Insufficient balance in your wallet');
+      }
+    }
+
     await this.redis.del(inviteId);
 
     const whiteId = Math.random() < 0.5 ? invite.inviterId : invite.inviteeId;

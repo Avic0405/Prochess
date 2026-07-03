@@ -172,7 +172,10 @@ export class UsersController {
   @Get(':username')
   @ApiOperation({ summary: 'Get user public profile' })
   @ApiParam({ name: 'username' })
-  getProfile(@Param('username') username: string) {
-    return this.usersService.getProfile(username);
+  getProfile(
+    @Param('username') username: string,
+    @CurrentUser('id') currentUserId: string,
+  ) {
+    return this.usersService.getProfile(username, currentUserId);
   }
 }

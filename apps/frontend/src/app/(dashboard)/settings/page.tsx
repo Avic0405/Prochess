@@ -80,7 +80,7 @@ export default function SettingsPage() {
 
   // Profile form
   const [username, setUsername] = useState(user?.username ?? '');
-  const [region, setRegion] = useState<'USD' | 'INR'>(user?.region ?? 'USD');
+  const [region, setRegion] = useState<string>(user?.region ?? 'USD');
   const [savingProfile, setSavingProfile] = useState(false);
 
   // Password form

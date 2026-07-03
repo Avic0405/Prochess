@@ -72,12 +72,13 @@ export class PaymentsService {
       receipt_email: user.email,
     });
 
-    // Track pending transaction
-    const wallet = await this.walletService.getOrCreateWallet(userId);
+    // Track pending transaction — always deposits into USD wallet
+    const wallet = await this.walletService.getOrCreateWallet(userId, Currency.USD);
     await this.prisma.transaction.create({
       data: {
         walletId: wallet.id,
         amount: amountUsd,
+        currency: Currency.USD,
         type: 'DEPOSIT',
         status: 'PENDING',
         gatewayRef: intent.id,
@@ -168,11 +169,13 @@ export class PaymentsService {
       notes: { userId, type: 'deposit' },
     });
 
-    const wallet = await this.walletService.getOrCreateWallet(userId);
+    // Track pending transaction — always deposits into INR wallet
+    const wallet = await this.walletService.getOrCreateWallet(userId, Currency.INR);
     await this.prisma.transaction.create({
       data: {
         walletId: wallet.id,
         amount: amountInr,
+        currency: Currency.INR,
         type: 'DEPOSIT',
         status: 'PENDING',
         gatewayRef: order.id,
@@ -205,11 +208,16 @@ export class PaymentsService {
     }
 
     const transaction = await this.prisma.transaction.findFirst({
-      where: { gatewayRef: orderId, status: 'PENDING' },
+      where: { gatewayRef: orderId },
       include: { wallet: true },
     });
 
     if (!transaction) throw new NotFoundException('Transaction not found');
+
+    // Idempotent: webhook may have already credited the wallet
+    if (transaction.status === 'COMPLETED') {
+      return { success: true, transactionId: transaction.id };
+    }
 
     await this.prisma.$transaction([
       this.prisma.transaction.update({
@@ -232,11 +240,133 @@ export class PaymentsService {
     return { success: true, transactionId: transaction.id };
   }
 
+  // ─── Razorpay Webhook ──────────────────────────────────────────────────────
+
+  async handleRazorpayWebhook(rawBody: Buffer, signature: string) {
+    const webhookSecret = this.configService.get<string>('razorpay.webhookSecret') ?? '';
+    const isPlaceholder = !webhookSecret || webhookSecret.startsWith('placeholder');
+
+    if (!isPlaceholder) {
+      const expectedSignature = createHmac('sha256', webhookSecret)
+        .update(rawBody.toString())
+        .digest('hex');
+      if (expectedSignature !== signature) {
+        throw new BadRequestException('Invalid Razorpay webhook signature');
+      }
+    } else {
+      this.logger.warn('Razorpay webhook secret not configured — skipping signature check');
+    }
+
+    let event: any;
+    try {
+      event = JSON.parse(rawBody.toString());
+    } catch {
+      throw new BadRequestException('Invalid webhook payload');
+    }
+
+    this.logger.log(`Razorpay webhook event: ${event.event}`);
+
+    switch (event.event) {
+      case 'payment.captured':
+        await this.handleRazorpayPaymentCaptured(event.payload?.payment?.entity);
+        break;
+      case 'payment.failed':
+        await this.handleRazorpayPaymentFailed(event.payload?.payment?.entity);
+        break;
+      default:
+        this.logger.log(`Unhandled Razorpay event: ${event.event}`);
+    }
+
+    return { received: true };
+  }
+
+  private async handleRazorpayPaymentCaptured(payment: any) {
+    if (!payment?.order_id) return;
+    const orderId: string = payment.order_id;
+
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { gatewayRef: orderId },
+      include: { wallet: true },
+    });
+
+    if (!transaction) {
+      this.logger.warn(`Razorpay webhook: no transaction for order ${orderId}`);
+      return;
+    }
+
+    // Idempotent: already processed (verify endpoint got here first)
+    if (transaction.status === 'COMPLETED') {
+      this.logger.log(`Razorpay webhook: order ${orderId} already completed`);
+      return;
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          status: 'COMPLETED',
+          gatewayPayload: { paymentId: payment.id, source: 'webhook' },
+        },
+      }),
+      this.prisma.wallet.update({
+        where: { id: transaction.walletId },
+        data: { balance: { increment: transaction.amount } },
+      }),
+    ]);
+
+    await this.notifications.create(transaction.wallet.userId, {
+      type: 'PAYMENT_SUCCESS',
+      title: 'Deposit Successful',
+      body: `₹${transaction.amount} added to your wallet`,
+      data: { transactionId: transaction.id },
+    });
+
+    this.logger.log(`Razorpay webhook: credited ₹${transaction.amount} for order ${orderId}`);
+  }
+
+  private async handleRazorpayPaymentFailed(payment: any) {
+    if (!payment?.order_id) return;
+    await this.prisma.transaction.updateMany({
+      where: { gatewayRef: payment.order_id, status: 'PENDING' },
+      data: { status: 'FAILED' },
+    });
+    this.logger.log(`Razorpay webhook: payment failed for order ${payment.order_id}`);
+  }
+
+  // ─── Payment History ───────────────────────────────────────────────────────
+
+  async getPaymentHistory(userId: string, page = 1, limit = 20) {
+    const skip = (page - 1) * limit;
+
+    const [transactions, total] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where: {
+          wallet: { userId },
+          type: { in: ['DEPOSIT', 'WITHDRAWAL'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          wallet: { select: { currency: true } },
+        },
+      }),
+      this.prisma.transaction.count({
+        where: {
+          wallet: { userId },
+          type: { in: ['DEPOSIT', 'WITHDRAWAL'] },
+        },
+      }),
+    ]);
+
+    return { transactions, total, page, limit };
+  }
+
   // ─── Escrow (Paid Game) ────────────────────────────────────────────────────
 
   async holdEscrow(gameId: string, userId: string, amount: number, currency: Currency) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+    const wallet = await this.prisma.wallet.findFirst({ where: { userId, currency } });
+    if (!wallet) throw new NotFoundException(`No ${currency} wallet found`);
 
     if (Number(wallet.balance) < amount) {
       throw new BadRequestException('Insufficient wallet balance');
@@ -244,7 +374,7 @@ export class PaymentsService {
 
     await this.prisma.$transaction([
       this.prisma.wallet.update({
-        where: { userId },
+        where: { id: wallet.id },
         data: {
           balance: { decrement: amount },
           lockedBalance: { increment: amount },
@@ -255,6 +385,7 @@ export class PaymentsService {
           walletId: wallet.id,
           gameId,
           amount,
+          currency,
           type: 'GAME_STAKE',
           status: 'COMPLETED',
           description: `Escrow for game ${gameId}`,
@@ -281,12 +412,11 @@ export class PaymentsService {
       const winnerAmount = totalPot * (1 - commission);
       const platformAmount = totalPot * commission;
 
-      const winnerWallet = await this.prisma.wallet.findUnique({
-        where: { userId: winnerId },
-      });
-      const loserWallet = await this.prisma.wallet.findUnique({
-        where: { userId: winnerId === whitePlayerId ? blackPlayerId : whitePlayerId },
-      });
+      const loserId = winnerId === whitePlayerId ? blackPlayerId : whitePlayerId;
+      const [winnerWallet, loserWallet] = await Promise.all([
+        this.prisma.wallet.findFirst({ where: { userId: winnerId, currency } }),
+        this.prisma.wallet.findFirst({ where: { userId: loserId, currency } }),
+      ]);
 
       if (!winnerWallet || !loserWallet) throw new NotFoundException('Wallet not found');
 
@@ -350,8 +480,8 @@ export class PaymentsService {
       const refundAmount = stake - drawFee;
 
       const [whiteWallet, blackWallet] = await Promise.all([
-        this.prisma.wallet.findUnique({ where: { userId: whitePlayerId } }),
-        this.prisma.wallet.findUnique({ where: { userId: blackPlayerId } }),
+        this.prisma.wallet.findFirst({ where: { userId: whitePlayerId, currency } }),
+        this.prisma.wallet.findFirst({ where: { userId: blackPlayerId, currency } }),
       ]);
 
       if (!whiteWallet || !blackWallet) throw new NotFoundException('Wallet not found');
@@ -396,7 +526,12 @@ export class PaymentsService {
   }
 
   async initiateWithdrawal(userId: string, amount: number, bankDetails: Record<string, string>) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    // Use the currency from bankDetails if provided, otherwise fall back to active wallet
+    const requestedCurrency = bankDetails.currency as Currency | undefined;
+    const wallet = requestedCurrency
+      ? await this.prisma.wallet.findFirst({ where: { userId, currency: requestedCurrency } })
+      : await this.prisma.wallet.findFirst({ where: { userId, isActive: true } });
+
     if (!wallet) throw new NotFoundException('Wallet not found');
 
     if (Number(wallet.balance) < amount) {
@@ -409,7 +544,7 @@ export class PaymentsService {
 
     await this.prisma.$transaction([
       this.prisma.wallet.update({
-        where: { userId },
+        where: { id: wallet.id },
         data: { balance: { decrement: amount } },
       }),
       this.prisma.transaction.create({

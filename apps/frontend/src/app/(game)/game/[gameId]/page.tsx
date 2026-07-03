@@ -11,7 +11,7 @@ import { ChessBoard } from '@/components/chess/ChessBoard';
 import { GameTimer } from '@/components/chess/GameTimer';
 import { MoveHistory } from '@/components/chess/MoveHistory';
 import { GameChat } from '@/components/chess/GameChat';
-import { GameOver } from '@/components/chess/GameOver';
+import { MatchResultDialog } from '@/components/chess/MatchResultDialog';
 import { CapturedPieces } from '@/components/chess/CapturedPieces';
 import { Button } from '@/components/ui/Button';
 import {
@@ -49,11 +49,17 @@ export default function GamePage() {
   const [boardFlipped, setBoardFlipped] = useState(false);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<'moves' | 'chat'>('moves');
+  const [resultDismissed, setResultDismissed] = useState(false);
 
   // Reset store on mount so stale game from previous match doesn't bleed in
   useEffect(() => {
     resetGame();
   }, [gameId]);
+
+  // Re-show dialog each time a new game ends
+  useEffect(() => {
+    if (isGameOver) setResultDismissed(false);
+  }, [isGameOver]);
 
   // HTTP fetch — populates board immediately before socket fires
   const { data: initialGame, isLoading } = useQuery({
@@ -169,20 +175,6 @@ export default function GamePage() {
                 lastMove={lastMove}
                 boardFlipped={boardFlipped}
               />
-
-              {/* Game-over overlay */}
-              {isGameOver && gameResult && (
-                <GameOver
-                  result={gameResult}
-                  reason={gameOverReason}
-                  game={activeGame}
-                  userId={user?.id}
-                  onRematch={isPlayer ? requestRematch : undefined}
-                  onAcceptRematch={acceptRematch}
-                  rematchState={rematchState}
-                  mode="overlay"
-                />
-              )}
             </div>
 
             {/* My captured pieces */}
@@ -392,6 +384,19 @@ export default function GamePage() {
           </div>
         </div>
       </div>
+
+      {/* ── Match Result Dialog — portal, renders outside the board ── */}
+      <MatchResultDialog
+        open={isGameOver && !!gameResult && !resultDismissed}
+        onClose={() => setResultDismissed(true)}
+        result={gameResult ?? ''}
+        reason={gameOverReason}
+        game={activeGame}
+        userId={user?.id}
+        onRematch={isPlayer ? requestRematch : undefined}
+        onAcceptRematch={acceptRematch}
+        rematchState={rematchState}
+      />
     </div>
   );
 }

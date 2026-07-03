@@ -93,3 +93,54 @@
 .timer-urgent {
   animation: timerUrgent 1s ease-in-out infinite;
 }
+
+/* ─── Match Result Dialog Animations ─────────────────────────────────────── */
+
+@keyframes trophyBounce {
+  0%   { transform: scale(0.15) rotate(-20deg); opacity: 0; }
+  35%  { transform: scale(1.35) rotate(10deg);  opacity: 1; }
+  60%  { transform: scale(0.85) rotate(-6deg); }
+  80%  { transform: scale(1.1)  rotate(3deg); }
+  90%  { transform: scale(0.96) rotate(-1deg); }
+  100% { transform: scale(1)    rotate(0deg); }
+}
+.animate-trophy-bounce {
+  animation: trophyBounce 0.75s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes confettiFall {
+  0%   { transform: translateY(-12px) rotate(0deg);    opacity: 1; }
+  75%  { opacity: 0.85; }
+  100% { transform: translateY(560px) rotate(680deg);  opacity: 0; }
+}
+
+@keyframes coinFloatUp {
+  0%   { transform: translateY(0)     scale(1);    opacity: 0; }
+  12%  { opacity: 1; }
+  82%  { opacity: 0.55; }
+  100% { transform: translateY(-115px) scale(0.55); opacity: 0; }
+}
+
+@keyframes resultGlowPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(234,179,8,0.22),
+                0 0 28px rgba(234,179,8,0.07);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(234,179,8,0.42),
+                0 0 52px rgba(234,179,8,0.14);
+  }
+}
+.result-glow-win {
+  animation: resultGlowPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes walletPop {
+  0%   { transform: scale(0.7); opacity: 0; }
+  55%  { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.animate-wallet-pop {
+  animation: walletPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: 0.3s;
+}

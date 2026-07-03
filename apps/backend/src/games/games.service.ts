@@ -23,6 +23,10 @@ export class GamesService {
     private configService: ConfigService,
   ) {}
 
+  private serializeGame<T extends Record<string, any>>(game: T): T {
+    return { ...game, stake: game.stake != null ? Number(game.stake) : null };
+  }
+
   async createFreeGame(
     whitePlayerId: string,
     blackPlayerId: string,
@@ -32,7 +36,7 @@ export class GamesService {
     const increment = options.increment ?? 0;
     const timeSeconds = timeMinutes * 60;
 
-    return this.prisma.game.create({
+    const game = await this.prisma.game.create({
       data: {
         whitePlayerId,
         blackPlayerId,
@@ -51,6 +55,7 @@ export class GamesService {
         blackPlayer: { select: { id: true, username: true, avatar: true, rating: true } },
       },
     });
+    return this.serializeGame(game);
   }
 
   async createPaidGame(
@@ -67,16 +72,26 @@ export class GamesService {
     const increment = options.increment ?? 0;
     const timeSeconds = timeMinutes * 60;
 
-    // Validate both players have sufficient balance
+    // Validate both players have a wallet for the game currency with sufficient balance
     const [whiteWallet, blackWallet] = await Promise.all([
-      this.prisma.wallet.findUnique({ where: { userId: whitePlayerId } }),
-      this.prisma.wallet.findUnique({ where: { userId: blackPlayerId } }),
+      this.prisma.wallet.findFirst({ where: { userId: whitePlayerId, currency: options.currency } }),
+      this.prisma.wallet.findFirst({ where: { userId: blackPlayerId, currency: options.currency } }),
     ]);
 
-    if (!whiteWallet || Number(whiteWallet.balance) < options.stake) {
+    if (!whiteWallet) {
+      throw new BadRequestException(
+        `White player does not have a ${options.currency} wallet`,
+      );
+    }
+    if (!blackWallet) {
+      throw new BadRequestException(
+        `Black player does not have a ${options.currency} wallet`,
+      );
+    }
+    if (Number(whiteWallet.balance) < options.stake) {
       throw new BadRequestException('White player has insufficient balance');
     }
-    if (!blackWallet || Number(blackWallet.balance) < options.stake) {
+    if (Number(blackWallet.balance) < options.stake) {
       throw new BadRequestException('Black player has insufficient balance');
     }
 
@@ -107,16 +122,16 @@ export class GamesService {
         },
       });
 
-      // Lock funds for both players
+      // Lock funds for both players (by wallet ID, not userId)
       await tx.wallet.update({
-        where: { userId: whitePlayerId },
+        where: { id: whiteWallet.id },
         data: {
           balance: { decrement: options.stake },
           lockedBalance: { increment: options.stake },
         },
       });
       await tx.wallet.update({
-        where: { userId: blackPlayerId },
+        where: { id: blackWallet.id },
         data: {
           balance: { decrement: options.stake },
           lockedBalance: { increment: options.stake },
@@ -130,6 +145,7 @@ export class GamesService {
             walletId: whiteWallet.id,
             gameId: newGame.id,
             amount: options.stake,
+            currency: options.currency,
             type: 'GAME_STAKE',
             status: 'COMPLETED',
             description: `Escrow for paid game`,
@@ -138,6 +154,7 @@ export class GamesService {
             walletId: blackWallet.id,
             gameId: newGame.id,
             amount: options.stake,
+            currency: options.currency,
             type: 'GAME_STAKE',
             status: 'COMPLETED',
             description: `Escrow for paid game`,
@@ -148,7 +165,7 @@ export class GamesService {
       return newGame;
     });
 
-    return game;
+    return this.serializeGame(game);
   }
 
   async getGame(gameId: string) {
@@ -166,7 +183,7 @@ export class GamesService {
     });
 
     if (!game) throw new NotFoundException('Game not found');
-    return game;
+    return this.serializeGame(game);
   }
 
   async getActiveGame(userId: string) {
@@ -186,7 +203,7 @@ export class GamesService {
       },
       orderBy: { startedAt: 'desc' },
     });
-    return game; // null when no active game — not a 404
+    return game ? this.serializeGame(game) : null;
   }
 
   async makeMove(
@@ -429,8 +446,8 @@ export class GamesService {
       const winnerAmount = stake * 2 * (1 - commission);
 
       const [winnerWallet, loserWallet] = await Promise.all([
-        this.prisma.wallet.findUnique({ where: { userId: winnerId } }),
-        this.prisma.wallet.findUnique({ where: { userId: loserId } }),
+        this.prisma.wallet.findFirst({ where: { userId: winnerId, currency } }),
+        this.prisma.wallet.findFirst({ where: { userId: loserId, currency } }),
       ]);
 
       if (!winnerWallet || !loserWallet) return;
@@ -459,8 +476,8 @@ export class GamesService {
       // Draw: refund both minus 2% fee
       const refund = stake * 0.98;
       const [whiteWallet, blackWallet] = await Promise.all([
-        this.prisma.wallet.findUnique({ where: { userId: whitePlayerId } }),
-        this.prisma.wallet.findUnique({ where: { userId: blackPlayerId } }),
+        this.prisma.wallet.findFirst({ where: { userId: whitePlayerId, currency } }),
+        this.prisma.wallet.findFirst({ where: { userId: blackPlayerId, currency } }),
       ]);
       if (!whiteWallet || !blackWallet) return;
 

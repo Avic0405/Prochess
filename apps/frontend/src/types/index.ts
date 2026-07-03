@@ -1,3 +1,5 @@
+export type Currency = 'USD' | 'INR' | 'EUR' | 'GBP';
+
 export interface User {
   id: string;
   email: string;
@@ -10,15 +12,18 @@ export interface User {
   draws: number;
   isOnline: boolean;
   role: 'USER' | 'ADMIN';
-  region: 'USD' | 'INR';
+  region: Currency;
   createdAt: string;
-  wallet?: Wallet;
+  wallet?: Wallet;    // active wallet (backward compat)
+  wallets?: Wallet[]; // all wallets
 }
 
 export interface Wallet {
+  id?: string;
   balance: string | number;
   lockedBalance: string | number;
-  currency: 'USD' | 'INR';
+  currency: Currency;
+  isActive?: boolean;
 }
 
 export interface Transaction {
@@ -95,6 +100,7 @@ export interface PublicUser {
   avatar?: string;
   rating: number;
   isOnline?: boolean;
+  friendStatus?: 'NONE' | 'PENDING_SENT' | 'PENDING_RECEIVED' | 'FRIENDS';
 }
 
 export interface FriendRequest {
@@ -148,7 +154,7 @@ export interface PaginatedResponse<T> {
 export interface MatchmakingOptions {
   gameType: 'FREE' | 'PAID';
   stake?: number;
-  currency?: 'USD' | 'INR';
+  currency?: Currency;
   timeControl?: TimeControl;
   timeMinutes?: number;
   increment?: number;

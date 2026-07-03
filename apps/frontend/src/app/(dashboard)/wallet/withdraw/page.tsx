@@ -16,7 +16,14 @@ export default function WithdrawPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { toast } = useToast();
-  const currency = (user?.region ?? 'USD') as 'USD' | 'INR';
+
+  const { data: wallets = [] } = useQuery<any[]>({
+    queryKey: ['wallets'],
+    queryFn: () => api.get('/wallet').then((r) => r.data),
+  });
+
+  const activeWallet = wallets.find((w) => w.isActive) ?? wallets[0];
+  const currency = (activeWallet?.currency ?? user?.region ?? 'USD') as 'USD' | 'INR';
   const isINR = currency === 'INR';
 
   const [amount, setAmount] = useState('');
@@ -36,6 +43,8 @@ export default function WithdrawPage() {
     queryFn: () => api.get('/wallet/balance').then((r) => r.data),
   });
 
+  const available = parseFloat(String(activeWallet?.balance ?? balance?.balance ?? '0'));
+
   const withdrawMutation = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
       api.post('/payments/withdraw', payload).then((r) => r.data),
@@ -52,7 +61,6 @@ export default function WithdrawPage() {
     },
   });
 
-  const available = parseFloat(balance?.balance ?? '0');
   const requested = parseFloat(amount || '0');
   const minAmount = isINR ? 100 : 5;
 

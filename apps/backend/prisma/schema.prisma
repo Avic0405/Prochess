@@ -82,6 +82,8 @@ enum NotificationType {
 enum Currency {
   USD
   INR
+  EUR
+  GBP
 }
 
 model User {
@@ -118,7 +120,7 @@ model User {
   lastSeenAt    DateTime  @default(now())
 
   // Relations
-  wallet             Wallet?
+  wallets            Wallet[]
   gamesAsWhite       Game[]          @relation("WhitePlayer")
   gamesAsBlack       Game[]          @relation("BlackPlayer")
   sentRequests       FriendRequest[] @relation("Sender")
@@ -161,15 +163,20 @@ model FriendRequest {
 }
 
 model Wallet {
-  id           String        @id @default(cuid())
-  userId       String        @unique
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  balance      Decimal       @default(0)
-  lockedBalance Decimal      @default(0)
-  currency     Currency      @default(USD)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance       Decimal       @default(0)
+  lockedBalance Decimal       @default(0)
+  currency      Currency      @default(USD)
+  isActive      Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  transactions  Transaction[]
+
+  @@unique([userId, currency])
+  @@index([userId])
+  @@index([userId, isActive])
 }
 
 model Transaction {
@@ -177,6 +184,7 @@ model Transaction {
   walletId       String
   wallet         Wallet            @relation(fields: [walletId], references: [id])
   amount         Decimal
+  currency       Currency?
   type           TransactionType
   status         TransactionStatus @default(PENDING)
   gatewayRef     String?           @unique // Payment gateway reference

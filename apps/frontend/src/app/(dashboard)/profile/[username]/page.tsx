@@ -7,7 +7,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { getRatingColor } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
-import { UserPlus, Swords, Camera, Loader2, Eye, X, TrendingUp } from 'lucide-react';
+import { UserPlus, Swords, Camera, Loader2, Eye, X, TrendingUp, Users, Clock, Check } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -51,7 +51,7 @@ function RatingChart({ history }: { history: { rating: number; change: number; c
   const data = history.map((h) => ({
     rating: h.rating,
     change: h.change,
-    date: new Date(h.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    date: new Date(h.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
   }));
 
   const ratings = data.map((d) => d.rating);
@@ -196,6 +196,7 @@ export default function ProfilePage() {
     try {
       await api.post(`/users/friends/request/${profile.id}`);
       toast({ title: 'Friend request sent!' });
+      queryClient.invalidateQueries({ queryKey: ['profile', username] });
     } catch (e: any) {
       toast({ variant: 'destructive', title: e?.response?.data?.message ?? 'Error' });
     } finally {
@@ -220,33 +221,31 @@ export default function ProfilePage() {
           <div className="relative shrink-0 group">
             <Avatar src={profile.avatar} username={profile.username} size={96} />
 
-            {isOwnProfile && (
+            {profile.avatar && (
               <div className="absolute inset-0 rounded-full bg-black/60 flex flex-col items-center justify-center gap-1
                               opacity-0 group-hover:opacity-100 transition-opacity">
-                {uploading ? (
+                {isOwnProfile && uploading ? (
                   <Loader2 className="w-6 h-6 text-white animate-spin" />
                 ) : (
                   <>
-                    {/* View full image — opens inline lightbox */}
-                    {profile.avatar && (
-                      <button
-                        onClick={() => setViewingAvatar(true)}
-                        className="flex items-center gap-1 text-white text-[10px] font-semibold
-                                   bg-white/20 hover:bg-white/30 rounded-full px-2 py-0.5 transition-colors"
-                        aria-label="View avatar"
-                      >
-                        <Eye className="w-3 h-3" /> View
-                      </button>
-                    )}
-                    {/* Upload new */}
                     <button
-                      onClick={handleAvatarClick}
+                      onClick={() => setViewingAvatar(true)}
                       className="flex items-center gap-1 text-white text-[10px] font-semibold
                                  bg-white/20 hover:bg-white/30 rounded-full px-2 py-0.5 transition-colors"
-                      aria-label="Change avatar"
+                      aria-label="View avatar"
                     >
-                      <Camera className="w-3 h-3" /> Change
+                      <Eye className="w-3 h-3" /> View
                     </button>
+                    {isOwnProfile && (
+                      <button
+                        onClick={handleAvatarClick}
+                        className="flex items-center gap-1 text-white text-[10px] font-semibold
+                                   bg-white/20 hover:bg-white/30 rounded-full px-2 py-0.5 transition-colors"
+                        aria-label="Change avatar"
+                      >
+                        <Camera className="w-3 h-3" /> Change
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -274,20 +273,39 @@ export default function ProfilePage() {
               {profile.rating} ELO
             </p>
             <p className="text-sm text-muted-foreground mt-1">
-              Member since {new Date(profile.createdAt).toLocaleDateString()}
+              Member since {new Date(profile.createdAt).toLocaleDateString('en-US')}
             </p>
           </div>
 
           {!isOwnProfile && currentUser && (
-            <Button
-              onClick={sendFriendRequest}
-              disabled={sendingRequest}
-              variant="outline"
-              className="gap-2 sm:shrink-0 w-full sm:w-auto"
-            >
-              <UserPlus className="w-4 h-4" />
-              {sendingRequest ? 'Sending...' : 'Add Friend'}
-            </Button>
+            profile.friendStatus === 'FRIENDS' ? (
+              <span className="flex items-center gap-2 text-sm font-medium text-green-600 dark:text-green-400 px-3 py-2 bg-green-500/10 rounded-lg sm:shrink-0">
+                <Users className="w-4 h-4" /> Friends
+              </span>
+            ) : profile.friendStatus === 'PENDING_SENT' ? (
+              <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground px-3 py-2 bg-muted rounded-lg sm:shrink-0">
+                <Clock className="w-4 h-4" /> Request Sent
+              </span>
+            ) : profile.friendStatus === 'PENDING_RECEIVED' ? (
+              <Button
+                onClick={sendFriendRequest}
+                disabled={sendingRequest}
+                className="gap-2 sm:shrink-0 w-full sm:w-auto"
+              >
+                <Check className="w-4 h-4" />
+                {sendingRequest ? 'Accepting...' : 'Accept Request'}
+              </Button>
+            ) : (
+              <Button
+                onClick={sendFriendRequest}
+                disabled={sendingRequest}
+                variant="outline"
+                className="gap-2 sm:shrink-0 w-full sm:w-auto"
+              >
+                <UserPlus className="w-4 h-4" />
+                {sendingRequest ? 'Sending...' : 'Add Friend'}
+              </Button>
+            )
           )}
         </div>
 

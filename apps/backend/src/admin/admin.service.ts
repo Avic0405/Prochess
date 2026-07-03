@@ -62,7 +62,7 @@ export class AdminService {
           id: true, email: true, username: true, rating: true,
           isVerified: true, isBanned: true, role: true,
           gamesPlayed: true, createdAt: true,
-          wallet: { select: { balance: true, currency: true } },
+          wallets: { select: { balance: true, currency: true, isActive: true }, orderBy: { isActive: 'desc' } },
         },
       }),
       this.prisma.user.count({ where }),

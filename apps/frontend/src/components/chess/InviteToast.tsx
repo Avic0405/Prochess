@@ -6,8 +6,9 @@ import Cookies from 'js-cookie';
 import { useAuthStore } from '@/store/authStore';
 import { getMatchmakingSocket } from '@/lib/socket';
 import { Button } from '@/components/ui/Button';
-import { Swords, X, Clock, Loader2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Swords, X, Clock, Loader2, AlertTriangle } from 'lucide-react';
+import { cn, formatCurrency } from '@/lib/utils';
+import { Currency } from '@/types';
 
 interface InviteData {
   inviteId: string;
@@ -18,13 +19,18 @@ interface InviteData {
     timeMinutes: number;
     increment: number;
     stake?: number;
+    currency?: Currency;
   };
 }
+
+const CURRENCY_FLAGS: Record<string, string> = {
+  USD: '🇺🇸', INR: '🇮🇳', EUR: '🇪🇺', GBP: '🇬🇧',
+};
 
 const INVITE_TTL = 60;
 
 export function InviteToast() {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
   const router = useRouter();
   const [invite, setInvite] = useState<InviteData | null>(null);
   const [timeLeft, setTimeLeft] = useState(INVITE_TTL);
@@ -103,6 +109,14 @@ export function InviteToast() {
 
   const tcLabel = `${invite.options.timeMinutes}+${invite.options.increment}`;
   const progress = (timeLeft / INVITE_TTL) * 100;
+  const isPaid = invite.options.gameType === 'PAID';
+  const inviteCurrency = invite.options.currency;
+
+  // Check if user has a wallet in the invite currency
+  const userWallets: any[] = (user as any)?.wallets ?? [];
+  const hasMatchingWallet = !isPaid || !inviteCurrency ||
+    userWallets.some((w) => w.currency === inviteCurrency);
+  const currencyMismatch = isPaid && inviteCurrency && !hasMatchingWallet;
 
   return (
     <div className={cn(
@@ -149,24 +163,33 @@ export function InviteToast() {
           </span>
           <span className={cn(
             'px-2 py-0.5 rounded-full text-xs font-medium',
-            invite.options.gameType === 'FREE'
-              ? 'bg-blue-500/10 text-blue-400'
-              : 'bg-yellow-500/10 text-yellow-500',
+            !isPaid ? 'bg-blue-500/10 text-blue-400' : 'bg-yellow-500/10 text-yellow-500',
           )}>
-            {invite.options.gameType === 'FREE' ? 'Free' : 'Paid'}
+            {!isPaid ? 'Free' : 'Paid'}
           </span>
-          {invite.options.gameType === 'PAID' && invite.options.stake && (
+          {isPaid && invite.options.stake && inviteCurrency && (
             <span className="px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-500 text-xs font-medium">
-              ${invite.options.stake} stake
+              {CURRENCY_FLAGS[inviteCurrency]} {formatCurrency(invite.options.stake, inviteCurrency)} stake
             </span>
           )}
         </div>
+
+        {/* Currency mismatch warning */}
+        {currencyMismatch && (
+          <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg p-2.5 text-xs text-destructive">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <p>
+              This friend is using <strong>{CURRENCY_FLAGS[inviteCurrency!]} {inviteCurrency}</strong>.
+              You don't have a {inviteCurrency} wallet. Go to Wallet to create one first.
+            </p>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex gap-2">
           <Button
             onClick={accept}
-            disabled={accepting}
+            disabled={accepting || !!currencyMismatch}
             size="sm"
             className="flex-1 gap-1.5 h-8 text-xs"
           >

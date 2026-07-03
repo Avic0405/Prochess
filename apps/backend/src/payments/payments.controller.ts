@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   Headers,
   Req,
@@ -8,6 +9,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Query,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -132,9 +134,31 @@ export class PaymentsController {
 
   @Post('razorpay/verify')
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Verify Razorpay payment' })
+  @ApiOperation({ summary: 'Verify Razorpay payment and credit wallet' })
   verifyRazorpay(@Body() dto: VerifyRazorpayDto) {
     return this.paymentsService.verifyRazorpayPayment(dto);
+  }
+
+  @Public()
+  @Post('razorpay/webhook')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Razorpay webhook — payment.captured / payment.failed' })
+  razorpayWebhook(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('x-razorpay-signature') signature: string,
+  ) {
+    return this.paymentsService.handleRazorpayWebhook(req.rawBody!, signature ?? '');
+  }
+
+  @Get('history')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get deposit and withdrawal history' })
+  getPaymentHistory(
+    @CurrentUser('id') userId: string,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.paymentsService.getPaymentHistory(userId, +page, +limit);
   }
 
   @Post('withdraw')
