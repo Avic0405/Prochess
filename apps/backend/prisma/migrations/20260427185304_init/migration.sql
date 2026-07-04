@@ -26,7 +26,7 @@ CREATE TYPE "FriendRequestStatus" AS ENUM ('PENDING', 'ACCEPTED', 'REJECTED');
 CREATE TYPE "NotificationType" AS ENUM ('FRIEND_REQUEST', 'FRIEND_ACCEPTED', 'GAME_INVITE', 'GAME_STARTED', 'GAME_RESULT', 'PAYMENT_SUCCESS', 'PAYMENT_FAILED', 'SYSTEM');
 
 -- CreateEnum
-CREATE TYPE "Currency" AS ENUM ('USD', 'INR');
+CREATE TYPE "Currency" AS ENUM ('USD', 'INR', 'EUR', 'GBP');
 
 -- CreateTable
 CREATE TABLE "User" (
@@ -85,9 +85,10 @@ CREATE TABLE "FriendRequest" (
 CREATE TABLE "Wallet" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "balance" DECIMAL(12,2) NOT NULL DEFAULT 0,
-    "lockedBalance" DECIMAL(12,2) NOT NULL DEFAULT 0,
+    "balance" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "lockedBalance" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "currency" "Currency" NOT NULL DEFAULT 'USD',
+    "isActive" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -98,7 +99,8 @@ CREATE TABLE "Wallet" (
 CREATE TABLE "Transaction" (
     "id" TEXT NOT NULL,
     "walletId" TEXT NOT NULL,
-    "amount" DECIMAL(12,2) NOT NULL,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "currency" "Currency",
     "type" "TransactionType" NOT NULL,
     "status" "TransactionStatus" NOT NULL DEFAULT 'PENDING',
     "gatewayRef" TEXT,
@@ -122,7 +124,7 @@ CREATE TABLE "Game" (
     "timeControlType" "TimeControl" NOT NULL DEFAULT 'BLITZ',
     "timeMinutes" INTEGER NOT NULL DEFAULT 10,
     "increment" INTEGER NOT NULL DEFAULT 0,
-    "stake" DECIMAL(12,2),
+    "stake" DECIMAL(65,30),
     "currency" "Currency",
     "pgn" TEXT,
     "fen" TEXT,
@@ -165,7 +167,7 @@ CREATE TABLE "MatchmakingQueue" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "gameType" "GameType" NOT NULL,
-    "stake" DECIMAL(12,2),
+    "stake" DECIMAL(65,30),
     "currency" "Currency",
     "ratingMin" INTEGER NOT NULL,
     "ratingMax" INTEGER NOT NULL,
@@ -196,7 +198,7 @@ CREATE TABLE "ChatMessage" (
     "id" TEXT NOT NULL,
     "gameId" TEXT NOT NULL,
     "senderId" TEXT NOT NULL,
-    "message" VARCHAR(500) NOT NULL,
+    "message" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "ChatMessage_pkey" PRIMARY KEY ("id")
@@ -239,13 +241,19 @@ CREATE INDEX "User_rating_idx" ON "User"("rating");
 CREATE UNIQUE INDEX "Friendship_userAId_userBId_key" ON "Friendship"("userAId", "userBId");
 
 -- CreateIndex
-CREATE INDEX "FriendRequest_receiverId_idx" ON "FriendRequest"("receiverId");
-
--- CreateIndex
 CREATE UNIQUE INDEX "FriendRequest_senderId_receiverId_key" ON "FriendRequest"("senderId", "receiverId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Wallet_userId_key" ON "Wallet"("userId");
+CREATE INDEX "FriendRequest_receiverId_idx" ON "FriendRequest"("receiverId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Wallet_userId_currency_key" ON "Wallet"("userId", "currency");
+
+-- CreateIndex
+CREATE INDEX "Wallet_userId_idx" ON "Wallet"("userId");
+
+-- CreateIndex
+CREATE INDEX "Wallet_userId_isActive_idx" ON "Wallet"("userId", "isActive");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Transaction_gatewayRef_key" ON "Transaction"("gatewayRef");
