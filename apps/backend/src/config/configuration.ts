@@ -2,6 +2,7 @@ export default () => ({
   port: parseInt(process.env.PORT ?? '4000', 10),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   appUrl: process.env.APP_URL ?? 'http://localhost:3000',
+  corsOrigins: process.env.CORS_ORIGINS ?? process.env.APP_URL ?? 'http://localhost:3000',
 
   database: {
     url: process.env.DATABASE_URL,

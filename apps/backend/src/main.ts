@@ -39,9 +39,14 @@ async function bootstrap() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   app.use(require('cookie-parser')());
 
-  // CORS
+  // CORS — supports comma-separated list in CORS_ORIGINS env var
+  const rawOrigins = configService.get<string>('corsOrigins', 'http://localhost:3000');
+  const allowedOrigins = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({
-    origin: configService.get<string>('appUrl', 'http://localhost:3000'),
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: ${origin} not allowed`));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
