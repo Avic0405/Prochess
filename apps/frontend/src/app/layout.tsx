@@ -41,17 +41,12 @@ export const metadata: Metadata = {
 
   icons: {
     icon: [
-      { url: '/icons/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
-      { url: '/icons/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icons/favicon-48x48.png', sizes: '48x48', type: 'image/png' },
-      { url: '/icons/favicon-64x64.png', sizes: '64x64', type: 'image/png' },
-      { url: '/icons/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
-      { url: '/icons/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' },
+      { url: '/favicon.svg',                type: 'image/svg+xml' },
+      { url: '/icons/favicon-32x32.png',    sizes: '32x32',   type: 'image/png' },
+      { url: '/icons/favicon-16x16.png',    sizes: '16x16',   type: 'image/png' },
     ],
-    shortcut: '/favicon.ico',
-    apple: [
-      { url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
-    ],
+    shortcut: [{ url: '/favicon.ico', type: 'image/x-icon' }],
+    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
     other: [
       { rel: 'mask-icon', url: '/icons/maskable-icon-512.png', color: '#6D28D9' },
     ],
