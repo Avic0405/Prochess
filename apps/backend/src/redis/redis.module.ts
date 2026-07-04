@@ -98,6 +98,8 @@ class InMemoryRedis {
     return removed;
   }
 
+  async ping(): Promise<string> { return 'PONG'; }
+
   on(_event: string, _handler: any): this { return this; }
 
   private _expireKey(key: string, ms: number) {
