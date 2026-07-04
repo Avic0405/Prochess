@@ -23,7 +23,7 @@ export class MailService implements OnModuleInit {
       !host || !user || !pass ||
       user.startsWith('placeholder') ||
       pass.startsWith('placeholder') ||
-      host === 'smtp.gmail.com' && user === 'noreply@chessplatform.com';
+      host === 'smtp.gmail.com' && user === 'noreply@prochess.live';
 
     if (isPlaceholder) {
       // Auto-create an Ethereal test account for dev
@@ -57,10 +57,10 @@ export class MailService implements OnModuleInit {
 
     await this.send({
       to: email,
-      subject: 'Verify your Chess Platform account',
+      subject: 'Verify your ProChess.live account',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a2e;">Welcome to Chess Platform, ${username}!</h2>
+          <h2 style="color: #6D28D9;">Welcome to ProChess.live, ${username}!</h2>
           <p>Please verify your email address to get started.</p>
           <a href="${verificationUrl}"
              style="display: inline-block; padding: 12px 24px; background: #6c5ce7;
@@ -81,7 +81,7 @@ export class MailService implements OnModuleInit {
 
     await this.send({
       to: email,
-      subject: 'Reset your Chess Platform password',
+      subject: 'Reset your ProChess.live password',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2>Password Reset Request</h2>
@@ -122,7 +122,7 @@ export class MailService implements OnModuleInit {
     }
 
     try {
-      const from = this.configService.get<string>('mail.from') ?? 'Chess Platform <noreply@chessplatform.com>';
+      const from = this.configService.get<string>('mail.from') ?? 'ProChess.live <noreply@prochess.live>';
       const info = await this.transporter.sendMail({ from, ...options });
 
       if (this.isEthereal) {

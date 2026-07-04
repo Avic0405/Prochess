@@ -179,7 +179,7 @@ function RazorpayDeposit({
         key: data.keyId,
         amount: data.amount * 100, // paise
         currency: 'INR',
-        name: 'Chess Platform',
+        name: 'ProChess.live',
         description: `Wallet Top-up — ${currency}`,
         order_id: data.orderId,
         handler: async (response: any) => {

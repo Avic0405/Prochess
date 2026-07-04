@@ -69,7 +69,7 @@ function LoginPageInner() {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold">Welcome back</h1>
-          <p className="text-muted-foreground mt-2">Log in to your Chess Platform account</p>
+          <p className="text-muted-foreground mt-2">Log in to your ProChess.live account</p>
         </div>
 
         <div className="bg-card border rounded-xl p-8 shadow-lg space-y-6">

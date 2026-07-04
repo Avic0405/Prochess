@@ -74,7 +74,7 @@ export function Navbar() {
           {/* Logo */}
           <Link href="/" className="font-bold text-xl flex items-center gap-2 shrink-0">
             <span className="text-2xl">♟</span>
-            <span><span className="text-primary">Chess</span>Platform</span>
+            <span><span className="text-primary">ProChess</span>.live</span>
           </Link>
 
           {/* Desktop nav links */}
@@ -189,7 +189,7 @@ export function Navbar() {
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <Link href="/" className="font-bold text-lg flex items-center gap-2" onClick={() => setMobileOpen(false)}>
             <span className="text-xl">♟</span>
-            <span><span className="text-primary">Chess</span>Platform</span>
+            <span><span className="text-primary">ProChess</span>.live</span>
           </Link>
           <button
             onClick={() => setMobileOpen(false)}

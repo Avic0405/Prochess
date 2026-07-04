@@ -233,7 +233,7 @@ export default function LandingPage() {
             Ready to test your game?
           </h2>
           <p className="text-muted-foreground text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
-            Join thousands of players already competing on ChessPlatform. Create a free
+            Join thousands of players already competing on ProChess.live. Create a free
             account and make your first move in under a minute.
           </p>
           <div className="flex flex-col xs:flex-row gap-3 sm:gap-4 justify-center">
@@ -252,10 +252,10 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 font-semibold text-sm">
             <span className="text-xl leading-none">♟</span>
-            <span><span className="text-primary">Chess</span>Platform</span>
+            <span><span className="text-primary">ProChess</span>.live</span>
           </div>
           <p className="text-xs text-muted-foreground text-center sm:text-left">
-            © {new Date().getFullYear()} ChessPlatform. All rights reserved.
+            © {new Date().getFullYear()} ProChess.live. All rights reserved.
           </p>
           <div className="flex items-center gap-4 sm:gap-6 text-xs text-muted-foreground">
             <Link href="/login" className="hover:text-foreground transition-colors">Login</Link>

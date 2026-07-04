@@ -149,8 +149,8 @@ export default function ReviewPage() {
     const pgnDate = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
 
     const headers = [
-      `[Event "Chess Platform Game"]`,
-      `[Site "Chess Platform"]`,
+      `[Event "ProChess.live Game"]`,
+      `[Site "ProChess.live"]`,
       `[Date "${pgnDate}"]`,
       `[White "${white?.username ?? 'Unknown'}"]`,
       `[Black "${black?.username ?? 'Unknown'}"]`,

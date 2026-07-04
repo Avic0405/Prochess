@@ -67,7 +67,7 @@ async function bootstrap() {
 
   if (nodeEnv !== 'production') {
     const swaggerConfig = new DocumentBuilder()
-      .setTitle('Chess Platform API')
+      .setTitle('ProChess.live API')
       .setDescription('Full-featured chess platform with real-time gameplay and payments')
       .setVersion('1.0.0')
       .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
