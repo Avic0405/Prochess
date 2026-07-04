@@ -72,7 +72,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2 font-bold text-lg shrink-0">
             <span className="text-2xl leading-none">♟</span>
-            <span><span className="text-primary">Chess</span>Platform</span>
+            <span><span className="text-primary">ProChess</span>.live</span>
           </Link>
           <div className="flex items-center gap-2 sm:gap-3">
             <Button asChild variant="ghost" size="sm" className="text-sm">
