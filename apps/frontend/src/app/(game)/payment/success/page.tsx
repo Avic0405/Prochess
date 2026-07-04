@@ -1,14 +1,13 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function PaymentSuccessPage() {
-  const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/store/authStore';
@@ -25,7 +25,7 @@ const TIME_CONTROLS = [
 
 type MatchStatus = 'idle' | 'searching' | 'inviting' | 'found';
 
-export default function LobbyPage() {
+function LobbyContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAuthenticated } = useAuthStore();
@@ -393,5 +393,17 @@ export default function LobbyPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function LobbyPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+      </div>
+    }>
+      <LobbyContent />
+    </Suspense>
   );
 }
