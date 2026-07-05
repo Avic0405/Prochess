@@ -12,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import * as argon2 from 'argon2';
-import { randomBytes, createHash, randomInt } from 'crypto';
+import { randomBytes, createHash, randomInt, createCipheriv, createDecipheriv } from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Currency } from '@prisma/client';
@@ -73,13 +73,10 @@ export class AuthService {
     });
     if (pendingWithSameUsername) throw new ConflictException('Username already taken');
 
-    // Hash password
-    const passwordHash = await argon2.hash(dto.password, {
-      type: argon2.argon2id,
-      memoryCost: 65536,
-      timeCost: 3,
-      parallelism: 4,
-    });
+    // Encrypt password for temporary storage — the real argon2 hash runs in verifyOtp()
+    // when the account is actually created. AES is microseconds vs 5-20s for argon2 on
+    // a low-resource server, keeping this endpoint responsive.
+    const passwordHash = this.encryptPass(dto.password);
 
     // Generate 6-digit cryptographically secure OTP
     const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -115,10 +112,14 @@ export class AuthService {
       this.redis.set(`otp:cooldown:${dto.email.toLowerCase()}`, '1', 'EX', 60),
     ]);
 
-    // Send OTP email (MailService handles Ethereal fallback in dev)
-    await this.mailService.sendOtpEmail(dto.email, dto.username, otp);
+    // Fire-and-forget — email delivery takes 1-3s but the user doesn't need to wait
+    // for it; the OTP is already saved in PendingRegistration. If sending fails, the
+    // user can click "Resend" after 60 seconds.
+    this.mailService.sendOtpEmail(dto.email, dto.username, otp).catch((err: Error) => {
+      console.warn(`[auth] OTP email failed for ${dto.email}: ${err?.message}`);
+    });
 
-    // Also log to console in dev mode for easy testing
+    // Log to console in dev mode for easy testing without email setup
     if (this.configService.get<string>('nodeEnv') !== 'production') {
       console.log('\n========================================');
       console.log('EMAIL OTP (dev mode)');
@@ -175,7 +176,24 @@ export class AuthService {
       throw new UnauthorizedException('Invalid verification code');
     }
 
-    // OTP is valid — create the account
+    // OTP is valid — decrypt the temporarily-stored password and hash it properly now
+    const plainPass = this.decryptPass(pending.passwordHash);
+    if (!plainPass) {
+      throw new BadRequestException(
+        'Registration session is invalid or was created with an old format. Please register again.',
+      );
+    }
+
+    // Full-strength argon2id hash runs here, not at register time, so the register
+    // endpoint stays fast. The user is on the verify-otp page, so the ~5s wait is fine.
+    const passwordHash = await argon2.hash(plainPass, {
+      type: argon2.argon2id,
+      memoryCost: 65536,
+      timeCost: 3,
+      parallelism: 4,
+    });
+
+    // Create the account
     const user = await this.prisma.$transaction(async (tx) => {
       // Final uniqueness check (race condition protection)
       const [emailTaken, usernameTaken] = await Promise.all([
@@ -189,7 +207,7 @@ export class AuthService {
         data: {
           email,
           username: pending.username,
-          passwordHash: pending.passwordHash,
+          passwordHash,
           isVerified: true,
           region: pending.region as any,
         },
@@ -280,7 +298,9 @@ export class AuthService {
       this.redis.set(cooldownKey, '1', 'EX', 60),
     ]);
 
-    await this.mailService.sendOtpEmail(pending.email, pending.username, otp);
+    this.mailService.sendOtpEmail(pending.email, pending.username, otp).catch((err: Error) => {
+      console.warn(`[auth] OTP resend email failed for ${email}: ${err?.message}`);
+    });
 
     if (this.configService.get<string>('nodeEnv') !== 'production') {
       console.log('\n========================================');
@@ -514,6 +534,35 @@ export class AuthService {
     await this.updateRefreshToken(user.id, tokens.refreshToken);
 
     return { user, ...tokens };
+  }
+
+  // Derives a deterministic 32-byte AES key from the JWT access secret.
+  private deriveEncKey(): Buffer {
+    const secret = this.configService.get<string>('jwt.accessSecret') ?? 'prochess-fallback-enc-key';
+    return createHash('sha256').update(secret).digest();
+  }
+
+  // AES-256-CBC encrypt — used to store passwords temporarily in PendingRegistration.
+  private encryptPass(plaintext: string): string {
+    const iv = randomBytes(16);
+    const cipher = createCipheriv('aes-256-cbc', this.deriveEncKey(), iv);
+    const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    return `enc:${iv.toString('hex')}:${enc.toString('hex')}`;
+  }
+
+  // Returns null on any failure so callers can surface a friendly error.
+  private decryptPass(stored: string): string | null {
+    try {
+      if (!stored.startsWith('enc:')) return null;
+      const parts = stored.split(':');
+      if (parts.length !== 3) return null;
+      const iv = Buffer.from(parts[1], 'hex');
+      const data = Buffer.from(parts[2], 'hex');
+      const decipher = createDecipheriv('aes-256-cbc', this.deriveEncKey(), iv);
+      return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+    } catch {
+      return null;
+    }
   }
 
   private async generateTokens(userId: string, email: string, role: string) {
