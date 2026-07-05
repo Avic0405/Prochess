@@ -3,16 +3,20 @@ import {
   BadRequestException,
   UnauthorizedException,
   ConflictException,
+  Inject,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import * as argon2 from 'argon2';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash, randomInt } from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Currency } from '@prisma/client';
+import { REDIS_CLIENT } from '../redis/redis.module';
 
 interface OAuthUserData {
   googleId?: string;
@@ -29,6 +33,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private mailService: MailService,
+    @Inject(REDIS_CLIENT) private redis: any,
   ) {}
 
   // True when SMTP is not configured with real credentials (dev / demo mode)
@@ -40,16 +45,35 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    // Rate limit: max 5 OTP sends per email per hour
+    const rateKey = `otp:count:${dto.email.toLowerCase()}`;
+    const currentCount = await this.redis.get(rateKey);
+    if (currentCount && parseInt(currentCount) >= 5) {
+      throw new HttpException(
+        'Too many verification requests. Please try again in an hour.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // Check email uniqueness in confirmed users
     const existingEmail = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
     });
     if (existingEmail) throw new ConflictException('Email already registered');
 
+    // Check username uniqueness in confirmed users
     const existingUsername = await this.prisma.user.findUnique({
       where: { username: dto.username },
     });
     if (existingUsername) throw new ConflictException('Username already taken');
 
+    // Check username uniqueness in pending registrations (different email)
+    const pendingWithSameUsername = await this.prisma.pendingRegistration.findFirst({
+      where: { username: dto.username, email: { not: dto.email.toLowerCase() } },
+    });
+    if (pendingWithSameUsername) throw new ConflictException('Username already taken');
+
+    // Hash password
     const passwordHash = await argon2.hash(dto.password, {
       type: argon2.argon2id,
       memoryCost: 65536,
@@ -57,57 +81,216 @@ export class AuthService {
       parallelism: 4,
     });
 
-    // Skip email verification when SMTP is not configured — auto-verify immediately
-    const skipVerification = this.mailNotConfigured;
-    const verificationToken = skipVerification ? null : randomBytes(32).toString('hex');
-    const verificationTokenExpiry = skipVerification
-      ? null
-      : new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // Generate 6-digit cryptographically secure OTP
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const otpHash = createHash('sha256').update(`${otp}:${dto.email.toLowerCase()}`).digest('hex');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
+    // Upsert pending registration (handles re-registration attempt)
+    await this.prisma.pendingRegistration.upsert({
+      where: { email: dto.email.toLowerCase() },
+      create: {
+        email: dto.email.toLowerCase(),
+        username: dto.username,
+        passwordHash,
+        region: dto.region ?? 'USD',
+        otpHash,
+        expiresAt,
+        attempts: 0,
+      },
+      update: {
+        username: dto.username,
+        passwordHash,
+        region: dto.region ?? 'USD',
+        otpHash,
+        expiresAt,
+        attempts: 0,
+      },
+    });
+
+    // Increment rate limit counter and set resend cooldown
+    const newCount = currentCount ? parseInt(currentCount) + 1 : 1;
+    await Promise.all([
+      this.redis.set(rateKey, String(newCount), 'EX', 3600),
+      this.redis.set(`otp:cooldown:${dto.email.toLowerCase()}`, '1', 'EX', 60),
+    ]);
+
+    // Send OTP email (MailService handles Ethereal fallback in dev)
+    await this.mailService.sendOtpEmail(dto.email, dto.username, otp);
+
+    // Also log to console in dev mode for easy testing
+    if (this.configService.get<string>('nodeEnv') !== 'production') {
+      console.log('\n========================================');
+      console.log('EMAIL OTP (dev mode)');
+      console.log(`Email: ${dto.email}`);
+      console.log(`OTP: ${otp}`);
+      console.log(`Expires: ${expiresAt.toISOString()}`);
+      console.log('========================================\n');
+    }
+
+    return {
+      message: 'Verification code sent to your email. Please check your inbox.',
+      email: dto.email.toLowerCase(),
+    };
+  }
+
+  async verifyOtp(dto: { email: string; otp: string }) {
+    const email = dto.email.toLowerCase();
+
+    const pending = await this.prisma.pendingRegistration.findUnique({
+      where: { email },
+    });
+
+    if (!pending) {
+      throw new BadRequestException(
+        'No pending verification found for this email. Please register again.',
+      );
+    }
+
+    if (pending.expiresAt < new Date()) {
+      await this.prisma.pendingRegistration.delete({ where: { email } }).catch(() => {});
+      throw new BadRequestException(
+        'Verification code has expired. Please register again.',
+      );
+    }
+
+    if (pending.attempts >= 10) {
+      throw new HttpException(
+        'Too many failed attempts. Please request a new verification code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // Compute expected hash
+    const expectedHash = createHash('sha256')
+      .update(`${dto.otp}:${email}`)
+      .digest('hex');
+
+    if (expectedHash !== pending.otpHash) {
+      // Increment attempts
+      await this.prisma.pendingRegistration.update({
+        where: { email },
+        data: { attempts: pending.attempts + 1 },
+      });
+      throw new UnauthorizedException('Invalid verification code');
+    }
+
+    // OTP is valid — create the account
     const user = await this.prisma.$transaction(async (tx) => {
+      // Final uniqueness check (race condition protection)
+      const [emailTaken, usernameTaken] = await Promise.all([
+        tx.user.findUnique({ where: { email } }),
+        tx.user.findUnique({ where: { username: pending.username } }),
+      ]);
+      if (emailTaken) throw new ConflictException('Email already registered');
+      if (usernameTaken) throw new ConflictException('Username already taken');
+
       const newUser = await tx.user.create({
         data: {
-          email: dto.email.toLowerCase(),
-          username: dto.username,
-          passwordHash,
-          verificationToken,
-          verificationTokenExpiry,
-          isVerified: skipVerification,   // auto-verify in dev/when mail not set up
-          region: (dto.region as Currency) ?? Currency.USD,
+          email,
+          username: pending.username,
+          passwordHash: pending.passwordHash,
+          isVerified: true,
+          region: pending.region as any,
         },
       });
 
       await tx.wallet.create({
         data: {
           userId: newUser.id,
-          currency: (dto.region as Currency) ?? Currency.USD,
+          currency: pending.region as any,
         },
       });
 
       return newUser;
     });
 
-    if (!skipVerification && verificationToken) {
-      await this.mailService.sendVerificationEmail(
-        user.email,
-        user.username,
-        verificationToken,
+    // Clean up pending registration and rate limit key
+    await Promise.all([
+      this.prisma.pendingRegistration.delete({ where: { email } }).catch(() => {}),
+      this.redis.del(`otp:count:${email}`),
+      this.redis.del(`otp:cooldown:${email}`),
+    ]);
+
+    // Generate tokens for auto-login
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        avatar: user.avatar,
+        rating: user.rating,
+        role: user.role,
+        region: user.region,
+      },
+      ...tokens,
+    };
+  }
+
+  async resendOtp(dto: { email: string }) {
+    const email = dto.email.toLowerCase();
+
+    // Check 60-second resend cooldown
+    const cooldownKey = `otp:cooldown:${email}`;
+    const onCooldown = await this.redis.get(cooldownKey);
+    if (onCooldown) {
+      throw new HttpException(
+        'Please wait 60 seconds before requesting a new code.',
+        HttpStatus.TOO_MANY_REQUESTS,
       );
-    } else if (skipVerification) {
-      const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
+    }
+
+    // Check hourly rate limit (max 5 total)
+    const rateKey = `otp:count:${email}`;
+    const currentCount = await this.redis.get(rateKey);
+    if (currentCount && parseInt(currentCount) >= 5) {
+      throw new HttpException(
+        'Too many verification requests. Please try again in an hour.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const pending = await this.prisma.pendingRegistration.findUnique({
+      where: { email },
+    });
+
+    if (!pending) {
+      throw new BadRequestException(
+        'No pending verification found. Please register again.',
+      );
+    }
+
+    // Generate new OTP
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const otpHash = createHash('sha256').update(`${otp}:${email}`).digest('hex');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await this.prisma.pendingRegistration.update({
+      where: { email },
+      data: { otpHash, expiresAt, attempts: 0 },
+    });
+
+    // Update rate limit and set cooldown
+    const newCount = currentCount ? parseInt(currentCount) + 1 : 1;
+    await Promise.all([
+      this.redis.set(rateKey, String(newCount), 'EX', 3600),
+      this.redis.set(cooldownKey, '1', 'EX', 60),
+    ]);
+
+    await this.mailService.sendOtpEmail(pending.email, pending.username, otp);
+
+    if (this.configService.get<string>('nodeEnv') !== 'production') {
       console.log('\n========================================');
-      console.log('EMAIL VERIFICATION (dev mode — auto-verified)');
-      console.log(`User: ${user.email}`);
-      console.log(`Verify URL: ${appUrl}/verify-email?token=(auto-verified, no token needed)`);
+      console.log('EMAIL OTP RESEND (dev mode)');
+      console.log(`Email: ${email}`);
+      console.log(`OTP: ${otp}`);
       console.log('========================================\n');
     }
 
-    return {
-      message: skipVerification
-        ? 'Account created! You can now log in.'
-        : 'Registration successful. Please check your email to verify your account.',
-      userId: user.id,
-    };
+    return { message: 'A new verification code has been sent to your email.' };
   }
 
   async login(dto: LoginDto) {

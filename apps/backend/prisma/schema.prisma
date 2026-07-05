@@ -310,3 +310,18 @@ model RatingHistory {
 
   @@index([userId])
 }
+
+model PendingRegistration {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String
+  passwordHash String
+  region       String   @default("USD")
+  otpHash      String
+  expiresAt    DateTime
+  attempts     Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+}

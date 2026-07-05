@@ -13,7 +13,9 @@ interface AuthState {
   isHydrated: boolean;
 
   login: (email: string, password: string) => Promise<void>;
-  register: (data: { email: string; username: string; password: string; region?: string }) => Promise<{ message: string }>;
+  register: (data: { email: string; username: string; password: string; region?: string }) => Promise<{ message: string; email: string }>;
+  verifyOtp: (email: string, otp: string) => Promise<void>;
+  resendOtp: (email: string) => Promise<{ message: string }>;
   logout: () => Promise<void>;
   setUser: (user: User) => void;
   updateUser: (data: Partial<User>) => void;
@@ -49,7 +51,25 @@ export const useAuthStore = create<AuthState>()(
 
       register: async (data) => {
         const response = await api.post('/auth/register', data);
-        return response.data;
+        return response.data; // { message, email }
+      },
+
+      verifyOtp: async (email, otp) => {
+        set({ isLoading: true });
+        try {
+          const { data } = await api.post('/auth/verify-otp', { email, otp });
+          const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+          Cookies.set('accessToken', data.accessToken, { expires: 1 / 96, secure: isSecure, sameSite: 'lax' });
+          Cookies.set('refreshToken', data.refreshToken, { expires: 7, secure: isSecure, sameSite: 'lax' });
+          set({ user: data.user, accessToken: data.accessToken, isAuthenticated: true });
+        } finally {
+          set({ isLoading: false });
+        }
+      },
+
+      resendOtp: async (email) => {
+        const response = await api.post('/auth/resend-otp', { email });
+        return response.data; // { message }
       },
 
       logout: async () => {

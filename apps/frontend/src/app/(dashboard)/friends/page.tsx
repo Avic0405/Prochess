@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import api from '@/lib/api';
@@ -17,7 +17,14 @@ export default function FriendsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'search'>('friends');
+
+  // Debounce search input — prevents excessive API calls and fixes Android IME issues
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const { data: friends = [] } = useQuery<PublicUser[]>({
     queryKey: ['friends'],
@@ -30,9 +37,9 @@ export default function FriendsPage() {
   });
 
   const { data: searchResults = [] } = useQuery<PublicUser[]>({
-    queryKey: ['user-search', searchQuery],
-    queryFn: () => api.get(`/users/search?q=${searchQuery}`).then((r) => r.data),
-    enabled: searchQuery.length >= 2,
+    queryKey: ['user-search', debouncedQuery],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(debouncedQuery)}`).then((r) => r.data),
+    enabled: debouncedQuery.length >= 2,
   });
 
   const acceptMutation = useMutation({
@@ -174,11 +181,17 @@ export default function FriendsPage() {
               placeholder="Search by username..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              inputMode="text"
+              type="search"
             />
           </div>
 
           <div className="space-y-2">
-            {searchQuery.length >= 2 && searchResults.length === 0 && (
+            {debouncedQuery.length >= 2 && searchResults.length === 0 && (
               <p className="text-center text-muted-foreground py-4">No users found</p>
             )}
             {searchResults.map((u) => (

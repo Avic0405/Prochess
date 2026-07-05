@@ -12,7 +12,7 @@ const GUEST_ONLY_EXACT = ['/'];
 // Prefix-matched paths that are guest-only
 const GUEST_ONLY_PREFIXES = [
   '/login', '/register', '/forgot-password', '/reset-password',
-  '/verify-email', '/oauth-success',
+  '/verify-email', '/oauth-success', '/verify-otp',
 ];
 
 export function middleware(request: NextRequest) {

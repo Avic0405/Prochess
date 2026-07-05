@@ -57,11 +57,9 @@ export default function RegisterPage() {
         password: data.password,
         region: data.region,
       });
-      toast({
-        title: 'Account created!',
-        description: result.message,
-      });
-      router.push(`/login?message=${encodeURIComponent(result.message)}`);
+      // Store OTP expiry in sessionStorage for the timer on the verify page
+      sessionStorage.setItem('otp_expires_at', String(Date.now() + 10 * 60 * 1000));
+      router.push(`/verify-otp?email=${encodeURIComponent(result.email)}`);
     } catch (err: any) {
       toast({
         variant: 'destructive',
