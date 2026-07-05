@@ -12,11 +12,11 @@ import { Trophy, Swords, Users, TrendingUp, Clock, DollarSign } from 'lucide-rea
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated, isHydrated } = useAuthStore();
 
   useEffect(() => {
-    if (!isAuthenticated) router.push('/login');
-  }, [isAuthenticated]);
+    if (isHydrated && !isAuthenticated) router.push('/login');
+  }, [isAuthenticated, isHydrated]);
 
   const { data: stats } = useQuery({
     queryKey: ['my-stats'],

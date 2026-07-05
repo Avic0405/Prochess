@@ -28,7 +28,7 @@ type MatchStatus = 'idle' | 'searching' | 'inviting' | 'found';
 function LobbyContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated, isHydrated } = useAuthStore();
 
   const inviteUserId = searchParams.get('invite');
   const inviteTargetName = searchParams.get('inviteName') ?? inviteUserId ?? '';
@@ -54,8 +54,8 @@ function LobbyContent() {
   const activeCurrencyWallet = wallets.find((w) => w.currency === activeCurrency);
 
   useEffect(() => {
-    if (!isAuthenticated) router.push('/login');
-  }, [isAuthenticated]);
+    if (isHydrated && !isAuthenticated) router.push('/login');
+  }, [isAuthenticated, isHydrated]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;

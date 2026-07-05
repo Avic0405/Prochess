@@ -10,6 +10,7 @@ interface AuthState {
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isHydrated: boolean;
 
   login: (email: string, password: string) => Promise<void>;
   register: (data: { email: string; username: string; password: string; region?: string }) => Promise<{ message: string }>;
@@ -17,6 +18,7 @@ interface AuthState {
   setUser: (user: User) => void;
   updateUser: (data: Partial<User>) => void;
   fetchMe: () => Promise<void>;
+  setHydrated: (v: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -26,6 +28,7 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       isAuthenticated: false,
       isLoading: false,
+      isHydrated: false,
 
       login: async (email, password) => {
         set({ isLoading: true });
@@ -74,6 +77,8 @@ export const useAuthStore = create<AuthState>()(
           set({ user: null, isAuthenticated: false });
         }
       },
+
+      setHydrated: (v) => set({ isHydrated: v }),
     }),
     {
       name: 'auth-storage',
@@ -82,6 +87,7 @@ export const useAuthStore = create<AuthState>()(
         user: state.user,
         accessToken: state.accessToken,
         isAuthenticated: state.isAuthenticated,
+        // isHydrated intentionally excluded — always resets to false on mount
       }),
     },
   ),

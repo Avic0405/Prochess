@@ -34,11 +34,11 @@ function HistoryContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated, isHydrated } = useAuthStore();
 
   useEffect(() => {
-    if (!isAuthenticated) router.push('/login');
-  }, [isAuthenticated]);
+    if (isHydrated && !isAuthenticated) router.push('/login');
+  }, [isAuthenticated, isHydrated]);
 
   const page       = Number(searchParams.get('page') ?? '1');
   const result     = searchParams.get('result') ?? '';

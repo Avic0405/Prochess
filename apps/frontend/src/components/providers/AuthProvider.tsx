@@ -8,8 +8,16 @@ import { InviteToast } from '@/components/chess/InviteToast';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     useAuthStore.persist.rehydrate();
-    if (Cookies.get('accessToken')) {
-      useAuthStore.getState().fetchMe();
+
+    const hasToken = Cookies.get('accessToken') || Cookies.get('refreshToken');
+    if (hasToken) {
+      // fetchMe triggers axios interceptor which auto-refreshes on 401 —
+      // so a valid refreshToken is enough to restore the session.
+      useAuthStore.getState().fetchMe().finally(() => {
+        useAuthStore.getState().setHydrated(true);
+      });
+    } else {
+      useAuthStore.getState().setHydrated(true);
     }
   }, []);
 

@@ -1,30 +1,43 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// Routes that require authentication
-const PROTECTED_PREFIXES = ['/dashboard', '/game', '/lobby', '/profile', '/admin', '/payment', '/friends', '/wallet'];
+const PROTECTED_PREFIXES = [
+  '/dashboard', '/game', '/lobby', '/profile', '/admin',
+  '/payment', '/friends', '/wallet', '/history', '/leaderboard', '/settings',
+];
 
-// Routes only for guests (redirect to dashboard if authenticated)
-const GUEST_ONLY = ['/login', '/register'];
+// Exact paths that are guest-only
+const GUEST_ONLY_EXACT = ['/'];
 
-const ADMIN_ROUTES = ['/admin'];
+// Prefix-matched paths that are guest-only
+const GUEST_ONLY_PREFIXES = [
+  '/login', '/register', '/forgot-password', '/reset-password',
+  '/verify-email', '/oauth-success',
+];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Treat the user as authenticated if either token cookie is present.
+  // The accessToken expires in 15 min, but a valid refreshToken lets the
+  // axios interceptor obtain a new one on the first API call — so checking
+  // only accessToken would incorrectly log users out between refreshes.
   const accessToken = request.cookies.get('accessToken')?.value;
+  const refreshToken = request.cookies.get('refreshToken')?.value;
+  const isAuthenticated = !!(accessToken || refreshToken);
 
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-  const isGuestOnly = GUEST_ONLY.some((p) => pathname.startsWith(p));
+  const isGuestOnly =
+    GUEST_ONLY_EXACT.includes(pathname) ||
+    GUEST_ONLY_PREFIXES.some((p) => pathname.startsWith(p));
 
-  // Redirect unauthenticated users away from protected routes
-  if (isProtected && !accessToken) {
+  if (isProtected && !isAuthenticated) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('redirect', pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Redirect authenticated users away from guest-only pages
-  if (isGuestOnly && accessToken) {
+  if (isGuestOnly && isAuthenticated) {
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 

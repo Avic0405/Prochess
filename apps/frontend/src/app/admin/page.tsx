@@ -12,15 +12,16 @@ import { cn } from '@/lib/utils';
 
 export default function AdminPage() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated, isHydrated } = useAuthStore();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'users' | 'games' | 'payments'>('users');
   const [search, setSearch] = useState('');
 
   useEffect(() => {
+    if (!isHydrated) return;
     if (!isAuthenticated) router.push('/login');
     else if (user?.role !== 'ADMIN') router.push('/dashboard');
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, isHydrated, user]);
 
   const { data: stats } = useQuery({
     queryKey: ['admin-stats'],
