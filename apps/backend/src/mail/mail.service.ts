@@ -1,239 +1,71 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 type MailPayload = { to: string; subject: string; html: string };
 
-/**
- * MailService — three-tier provider strategy
- *
- *  Tier 1 (production, recommended):
- *    RESEND_API_KEY is set → Resend HTTP API (port 443, never blocked, zero SMTP)
- *
- *  Tier 2 (production, SMTP):
- *    MAIL_HOST + MAIL_USER + MAIL_PASS are set → real SMTP transporter
- *    (Gmail port 587 STARTTLS or port 465 SSL)
- *
- *  Tier 3 (development fallback):
- *    Nothing configured → Ethereal test account (emails NOT delivered to real inboxes)
- */
 @Injectable()
 export class MailService implements OnModuleInit {
   private readonly logger = new Logger(MailService.name);
 
-  private transporter: nodemailer.Transporter | null = null;
-  private smtpVerified = false;
-  private isEthereal = false;
-
-  private resendApiKey: string | null = null;
-  private fromAddress = 'ProChess.live <noreply@prochess.live>';
+  private resend!: Resend;
+  private fromAddress = 'onboarding@resend.dev';
+  private apiKeySet = false;
 
   constructor(private configService: ConfigService) {}
 
-  async onModuleInit() {
+  onModuleInit(): void {
+    const apiKey = this.configService.get<string>('mail.resendApiKey') ?? '';
     this.fromAddress =
-      this.configService.get<string>('mail.from') ??
-      'ProChess.live <noreply@prochess.live>';
-    await this.initProvider();
-  }
-
-  // ── Provider initialisation ─────────────────────────────────────────────
-
-  private async initProvider(): Promise<void> {
-    const resendKey = this.configService.get<string>('mail.resendApiKey') ?? '';
-
-    // ── Tier 1: Resend HTTP API ───────────────────────────────────────────
-    if (resendKey && !resendKey.startsWith('re_placeholder')) {
-      this.resendApiKey = resendKey;
-      this.logger.log('');
-      this.logger.log('─── Mail Provider ──────────────────────────────────');
-      this.logger.log('  Mode : Resend HTTP API  (https://resend.com)');
-      this.logger.log(`  From : ${this.fromAddress}`);
-      this.logger.log('────────────────────────────────────────────────────');
-      this.logger.log('✓ Resend ready — SMTP bypassed entirely');
-      return;
-    }
-
-    // ── Tier 2 / 3: SMTP ─────────────────────────────────────────────────
-    const host = this.configService.get<string>('mail.host') ?? '';
-    const port = this.configService.get<number>('mail.port') ?? 587;
-    const user = this.configService.get<string>('mail.user') ?? '';
-    const pass = this.configService.get<string>('mail.pass') ?? '';
+      this.configService.get<string>('mail.from') ?? 'onboarding@resend.dev';
 
     this.logger.log('');
-    this.logger.log('─── Mail Provider ──────────────────────────────────');
-    this.logger.log('  Mode      : SMTP');
-    this.logger.log(`  MAIL_HOST : ${host || '(not set)'}`);
-    this.logger.log(`  MAIL_PORT : ${port}`);
-    this.logger.log(`  MAIL_USER : ${user || '(not set)'}`);
-    this.logger.log(`  MAIL_FROM : ${this.fromAddress}`);
-    this.logger.log('  MAIL_PASS : (hidden)');
+    this.logger.log('─── Email Provider ─────────────────────────────────');
+    this.logger.log('  Provider : Resend SDK  (https://resend.com)');
+    this.logger.log(`  From     : ${this.fromAddress}`);
+    this.logger.log(`  API Key  : ${apiKey ? apiKey.slice(0, 10) + '…' : '(NOT SET ⚠)'}`);
     this.logger.log('────────────────────────────────────────────────────');
 
-    const isUnconfigured =
-      !host ||
-      !user ||
-      !pass ||
-      user.startsWith('placeholder') ||
-      pass.startsWith('placeholder') ||
-      (host === 'smtp.gmail.com' && user === 'noreply@prochess.live');
-
-    if (isUnconfigured) {
-      await this.initEthereal();
-      return;
-    }
-
-    await this.initSmtp(host, port, user, pass);
-  }
-
-  private async initEthereal(): Promise<void> {
-    this.logger.warn(
-      'SMTP credentials not configured — falling back to Ethereal (emails NOT delivered to real inboxes)',
-    );
-    try {
-      const acct = await nodemailer.createTestAccount();
-      this.isEthereal = true;
-      this.transporter = nodemailer.createTransport({
-        host: 'smtp.ethereal.email',
-        port: 587,
-        secure: false,
-        auth: { user: acct.user, pass: acct.pass },
-        connectionTimeout: 10_000,
-        greetingTimeout: 10_000,
-        socketTimeout: 15_000,
-      });
-      this.smtpVerified = true;
-      this.logger.log(`📧 Ethereal ready`);
-      this.logger.log(`   Login : ${acct.user} / ${acct.pass}`);
-      this.logger.log('   Preview inbox at https://ethereal.email');
-    } catch (err) {
-      this.logger.warn(
-        `Ethereal setup failed: ${(err as Error).message} — emails will be console-logged only`,
+    if (!apiKey) {
+      this.logger.error(
+        '✗ RESEND_API_KEY is not set — email sends will fail. ' +
+          'Add it to Render → Environment.',
       );
+      this.resend = new Resend('invalid-placeholder');
+      this.apiKeySet = false;
+    } else {
+      this.resend = new Resend(apiKey);
+      this.apiKeySet = true;
+      this.logger.log('✓ Resend SDK initialised');
     }
   }
 
-  private async initSmtp(host: string, port: number, user: string, pass: string): Promise<void> {
-    // port 465 = SSL on connect; port 587 = plain connect → STARTTLS upgrade
-    const useSSL = port === 465;
+  // ── Provider state (AuthService + HealthController) ─────────────────────
 
-    this.transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: useSSL,
-      requireTLS: !useSSL, // refuse connection if STARTTLS unavailable on port 587
-      auth: { user, pass },
-      tls: {
-        rejectUnauthorized: true,
-        minVersion: 'TLSv1.2',
-      },
-      // Short timeouts — surface problems fast instead of hanging for 2 minutes
-      connectionTimeout: 10_000, // 10 s — TCP connect
-      greetingTimeout: 10_000,   // 10 s — wait for SMTP banner
-      socketTimeout: 20_000,     // 20 s — idle after banner
-    });
-
-    // Verify the connection and credentials immediately at startup.
-    // This is the single most important diagnostic step — it surfaces the real
-    // error (timeout, auth failure, TLS error) in the logs right at boot time.
-    this.logger.log(`Verifying SMTP connection to ${host}:${port} …`);
-    try {
-      await this.transporter.verify();
-      this.smtpVerified = true;
-      this.logger.log(`✓ SMTP authenticated and ready`);
-    } catch (err: any) {
-      this.smtpVerified = false;
-      this.logger.error('✗ SMTP verify FAILED — emails will not be delivered');
-      this.logger.error(`  message : ${err?.message ?? 'unknown'}`);
-      this.logger.error(`  code    : ${err?.code ?? 'N/A'}`);
-      this.logger.error(`  command : ${err?.command ?? 'N/A'}`);
-
-      const isNetworkError = [
-        'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'EAI_AGAIN',
-      ].includes(err?.code as string);
-
-      if (isNetworkError) {
-        this.logger.error('');
-        this.logger.error(
-          '  Outbound SMTP is unreachable. Possible causes:',
-        );
-        this.logger.error(
-          '    1. IPv6 DNS — Node.js resolved smtp.gmail.com to an IPv6 address',
-        );
-        this.logger.error(
-          '       that is unreachable from this server (common on Render free tier)',
-        );
-        this.logger.error(
-          '    2. Outbound port 587/465 restricted by the hosting provider',
-        );
-        this.logger.error(
-          '    3. Wrong MAIL_HOST, MAIL_PORT, or MAIL_PASS (try regenerating App Password)',
-        );
-        this.logger.error('');
-        this.logger.error(
-          '  FASTEST FIX: set RESEND_API_KEY in Render Environment',
-        );
-        this.logger.error(
-          '  → Sign up free at https://resend.com (3 000 emails/month)',
-        );
-        this.logger.error(
-          '  → Verify your sending domain, then add RESEND_API_KEY to Render',
-        );
-      } else if (err?.code === 'EAUTH' || err?.responseCode === 535) {
-        this.logger.error('');
-        this.logger.error('  Authentication failed. For Gmail:');
-        this.logger.error('    • 2-Step Verification must be ON for your Google account');
-        this.logger.error('    • MAIL_PASS must be a 16-character App Password (not your account password)');
-        this.logger.error('    • Generate one at: https://myaccount.google.com → Security → App passwords');
-      }
-      // Do NOT throw — the app still starts; individual send calls will fail with clear errors
-    }
-  }
-
-  // ── Provider state ──────────────────────────────────────────────────────
-
-  /** true when emails can be dispatched (Resend API key set, OR SMTP verified at startup) */
+  /** true when RESEND_API_KEY is present */
   get isReady(): boolean {
-    if (this.resendApiKey) return true;
-    return this.smtpVerified; // false = SMTP failed verify at startup
+    return this.apiKeySet;
   }
 
-  get providerName(): 'resend' | 'smtp' | 'ethereal' | 'none' {
-    if (this.resendApiKey) return 'resend';
-    if (this.transporter && this.isEthereal) return 'ethereal';
-    if (this.transporter) return 'smtp';
-    return 'none';
-  }
-
-  /** Used by the /health/email endpoint — instant, uses cached startup state. */
+  /** Instant check — no network call required */
   verifyConnection(): { status: 'ok' | 'error'; provider: string; detail?: string } {
-    if (this.resendApiKey) {
-      return { status: 'ok', provider: 'resend', detail: 'Resend API key configured' };
-    }
-    if (!this.transporter) {
+    if (this.apiKeySet) {
       return {
-        status: 'error',
-        provider: 'none',
-        detail: 'No email provider configured. Set RESEND_API_KEY or MAIL_HOST/MAIL_USER/MAIL_PASS.',
+        status: 'ok',
+        provider: 'resend',
+        detail: `Sending from: ${this.fromAddress}`,
       };
-    }
-    if (this.isEthereal) {
-      return { status: 'ok', provider: 'ethereal', detail: 'Ethereal dev account (NOT delivered to real inboxes)' };
-    }
-    if (this.smtpVerified) {
-      return { status: 'ok', provider: 'smtp' };
     }
     return {
       status: 'error',
-      provider: 'smtp',
+      provider: 'resend',
       detail:
-        'SMTP verify failed at startup (ETIMEDOUT). ' +
-        'Most likely cause: Gmail SMTP is unreachable from this server due to IPv6 DNS. ' +
-        'Fix: add RESEND_API_KEY to Render environment (https://resend.com).',
+        'RESEND_API_KEY is not set. ' +
+        'Sign up at https://resend.com (free: 3 000 emails/month) and add the key to Render Environment.',
     };
   }
 
-  // ── Public API ──────────────────────────────────────────────────────────
+  // ── Public email API ─────────────────────────────────────────────────────
 
   async sendOtpEmail(email: string, username: string, otp: string): Promise<void> {
     await this.send({
@@ -290,80 +122,38 @@ export class MailService implements OnModuleInit {
     });
   }
 
-  // ── Internal dispatch ───────────────────────────────────────────────────
+  // ── Internal dispatch ────────────────────────────────────────────────────
 
   private async send(payload: MailPayload): Promise<void> {
-    this.logger.log(`→ Sending  to="${payload.to}"  subject="${payload.subject}"`);
+    this.logger.log(
+      `→ Sending  from="${this.fromAddress}"  to="${payload.to}"  subject="${payload.subject}"`,
+    );
 
-    if (this.resendApiKey) {
-      await this.sendViaResend(payload);
-      return;
-    }
-
-    await this.sendViaSmtp(payload);
-  }
-
-  // ── Resend HTTP API ─────────────────────────────────────────────────────
-
-  private async sendViaResend(payload: MailPayload): Promise<void> {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.resendApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: this.fromAddress,
-        to: [payload.to],
-        subject: payload.subject,
-        html: payload.html,
-      }),
-    });
-
-    const json = (await res.json()) as Record<string, unknown>;
-
-    if (!res.ok) {
-      const detail = (json?.message as string) ?? JSON.stringify(json);
-      throw new Error(`Resend API ${res.status}: ${detail}`);
-    }
-
-    this.logger.log(`✓ Resend accepted  id=${json['id'] as string}`);
-  }
-
-  // ── SMTP (Nodemailer) ───────────────────────────────────────────────────
-
-  private async sendViaSmtp(payload: MailPayload): Promise<void> {
-    if (!this.transporter) {
-      throw new Error(`Email not sent — no transporter configured (to=${payload.to})`);
-    }
-
-    // Fast-fail when SMTP verification failed at startup.
-    // Without this, sendMail() would silently wait for the full connectionTimeout
-    // (10 s) before throwing — causing resendOtp() to hang and then return HTTP 500.
-    if (!this.smtpVerified && !this.isEthereal) {
+    if (!this.apiKeySet) {
       throw new Error(
-        `SMTP is not available (connection failed at startup — likely IPv6 / port-block). ` +
-        `Set RESEND_API_KEY in Render to use the Resend HTTP API instead.`,
+        'Email not sent — RESEND_API_KEY is not configured. ' +
+          'Add it to Render Environment to enable email delivery.',
       );
     }
 
-    const info = await this.transporter.sendMail({
+    const { data, error } = await this.resend.emails.send({
       from: this.fromAddress,
-      to: payload.to,
+      to: [payload.to],
       subject: payload.subject,
       html: payload.html,
     });
 
-    if (this.isEthereal) {
-      const preview = nodemailer.getTestMessageUrl(info);
-      this.logger.log(`✓ Ethereal captured  preview=${preview}`);
-    } else {
-      this.logger.log(`✓ SMTP delivered  messageId=${info.messageId}`);
+    if (error) {
+      const detail = JSON.stringify(error);
+      this.logger.error(`✗ Resend error  to="${payload.to}"  error=${detail}`);
+      throw new Error(`Resend delivery failed: ${detail}`);
     }
+
+    this.logger.log(`✓ Resend sent  id="${data?.id}"  to="${payload.to}"`);
   }
 }
 
-// ── OTP email HTML template ─────────────────────────────────────────────────
+// ── OTP email HTML template ──────────────────────────────────────────────────
 
 function buildOtpHtml(username: string, otp: string): string {
   return `<!DOCTYPE html>

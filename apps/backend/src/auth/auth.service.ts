@@ -39,14 +39,6 @@ export class AuthService {
     @Inject(REDIS_CLIENT) private redis: any,
   ) {}
 
-  // True when SMTP is not configured with real credentials (dev / demo mode)
-  private get mailNotConfigured(): boolean {
-    const pass = this.configService.get<string>('mail.pass') ?? '';
-    const user = this.configService.get<string>('mail.user') ?? '';
-    const isDev = this.configService.get<string>('nodeEnv') !== 'production';
-    return isDev || pass.startsWith('placeholder') || user.startsWith('placeholder') || !pass || !user;
-  }
-
   async register(dto: RegisterDto) {
     // Rate limit: max 5 OTP sends per email per hour
     const rateKey = `otp:count:${dto.email.toLowerCase()}`;
@@ -341,18 +333,8 @@ export class AuthService {
     const isPasswordValid = await argon2.verify(user.passwordHash, dto.password);
     if (!isPasswordValid) throw new UnauthorizedException('Invalid credentials');
 
-    // In dev / mail-not-configured mode: auto-verify on first login attempt
     if (!user.isVerified) {
-      if (this.mailNotConfigured) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { isVerified: true },
-        });
-      } else {
-        throw new UnauthorizedException(
-          'Please verify your email before logging in',
-        );
-      }
+      throw new UnauthorizedException('Please verify your email before logging in');
     }
 
     if (user.isBanned) throw new UnauthorizedException('Account suspended');
@@ -440,18 +422,11 @@ export class AuthService {
       data: { passwordResetToken: token, passwordResetExpiry: expiry },
     });
 
-    if (this.mailNotConfigured) {
-      // Dev mode: log token so developer can test without SMTP
-      const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
-      this.logger.debug('========================================');
-      this.logger.debug('PASSWORD RESET (dev mode — no SMTP)');
-      this.logger.debug(`User : ${user.email}`);
-      this.logger.debug(`Token: ${token}`);
-      this.logger.debug(`URL  : ${appUrl}/reset-password?token=${token}`);
-      this.logger.debug('========================================');
-    } else {
-      await this.mailService.sendPasswordResetEmail(user.email, user.username, token);
-    }
+    const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
+    this.logger.debug(`PASSWORD RESET — ${user.email} — ${appUrl}/reset-password?token=${token}`);
+    this.mailService.sendPasswordResetEmail(user.email, user.username, token).catch((err: Error) => {
+      this.logger.error(`Password reset email failed for ${user.email}: ${err?.message}`);
+    });
 
     return { message: 'If that email exists, a reset link has been sent.' };
   }
