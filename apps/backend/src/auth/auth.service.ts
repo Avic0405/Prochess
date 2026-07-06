@@ -115,25 +115,34 @@ export class AuthService {
       this.redis.set(`otp:cooldown:${dto.email.toLowerCase()}`, '1', 'EX', 60),
     ]);
 
-    // Fire-and-forget — the OTP is already saved; the user doesn't wait for delivery.
-    // If sending fails the user can click Resend after 60 s.
-    this.mailService.sendOtpEmail(dto.email, dto.username, otp).catch((err: Error) => {
-      this.logger.error(`OTP email failed for ${dto.email}: ${err?.message}`);
-    });
+    // Always log OTP so it's retrievable from Render logs during dev/testing
+    this.logger.debug('========================================');
+    this.logger.debug(`OTP    : ${otp}`);
+    this.logger.debug(`Email  : ${dto.email}`);
+    this.logger.debug(`Expires: ${expiresAt.toISOString()}`);
+    this.logger.debug('========================================');
 
-    // Print OTP to logs in dev mode so developers can test without real email
-    if (this.configService.get<string>('nodeEnv') !== 'production') {
-      this.logger.debug('========================================');
-      this.logger.debug('EMAIL OTP (dev mode)');
-      this.logger.debug(`Email  : ${dto.email}`);
-      this.logger.debug(`OTP    : ${otp}`);
-      this.logger.debug(`Expires: ${expiresAt.toISOString()}`);
-      this.logger.debug('========================================');
+    // Check provider state at registration time.
+    // If it's known broken (SMTP failed at startup), surface that immediately
+    // instead of silently continuing and leaving the user on a verify page with no email.
+    const emailReady = this.mailService.isReady;
+
+    if (emailReady) {
+      // Fire-and-forget — OTP is saved; user doesn't wait for delivery.
+      // If it fails after this point they can use the Resend button (60 s cooldown).
+      this.mailService.sendOtpEmail(dto.email, dto.username, otp).catch((err: Error) => {
+        this.logger.error(`OTP email failed for ${dto.email}: ${err?.message}`);
+      });
+    } else {
+      this.logger.warn(`Email provider not ready — OTP saved but not sent to ${dto.email}`);
     }
 
     return {
-      message: 'Verification code sent to your email. Please check your inbox.',
+      message: emailReady
+        ? 'Verification code sent to your email. Please check your inbox.'
+        : 'Your OTP has been generated but we could not send the email — our mail service is temporarily unavailable. Please use the Resend button on the next page.',
       email: dto.email.toLowerCase(),
+      emailSent: emailReady,
     };
   }
 
@@ -300,18 +309,22 @@ export class AuthService {
       this.redis.set(cooldownKey, '1', 'EX', 60),
     ]);
 
-    // Awaited — the user explicitly requested a resend and needs confirmation it worked.
-    await this.mailService.sendOtpEmail(pending.email, pending.username, otp);
+    this.logger.debug(`Resend OTP — Email: ${email}  OTP: ${otp}`);
 
-    if (this.configService.get<string>('nodeEnv') !== 'production') {
-      this.logger.debug('========================================');
-      this.logger.debug('EMAIL OTP RESEND (dev mode)');
-      this.logger.debug(`Email : ${email}`);
-      this.logger.debug(`OTP   : ${otp}`);
-      this.logger.debug('========================================');
+    try {
+      await this.mailService.sendOtpEmail(pending.email, pending.username, otp);
+      return { message: 'A new verification code has been sent to your email.' };
+    } catch (err: any) {
+      // Log the real error for ops visibility, but NEVER crash the API with a 500.
+      // The OTP is already saved in the database — the user can try again.
+      this.logger.error(`Resend OTP email failed for ${email}: ${err?.message}`);
+      return {
+        message:
+          'OTP regenerated successfully but email delivery failed. ' +
+          'Please try again in a few minutes.',
+        emailSent: false,
+      };
     }
-
-    return { message: 'A new verification code has been sent to your email.' };
   }
 
   async login(dto: LoginDto) {

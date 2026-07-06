@@ -190,6 +190,49 @@ export class MailService implements OnModuleInit {
     }
   }
 
+  // ── Provider state ──────────────────────────────────────────────────────
+
+  /** true when emails can be dispatched (Resend API key set, OR SMTP verified at startup) */
+  get isReady(): boolean {
+    if (this.resendApiKey) return true;
+    return this.smtpVerified; // false = SMTP failed verify at startup
+  }
+
+  get providerName(): 'resend' | 'smtp' | 'ethereal' | 'none' {
+    if (this.resendApiKey) return 'resend';
+    if (this.transporter && this.isEthereal) return 'ethereal';
+    if (this.transporter) return 'smtp';
+    return 'none';
+  }
+
+  /** Used by the /health/email endpoint — instant, uses cached startup state. */
+  verifyConnection(): { status: 'ok' | 'error'; provider: string; detail?: string } {
+    if (this.resendApiKey) {
+      return { status: 'ok', provider: 'resend', detail: 'Resend API key configured' };
+    }
+    if (!this.transporter) {
+      return {
+        status: 'error',
+        provider: 'none',
+        detail: 'No email provider configured. Set RESEND_API_KEY or MAIL_HOST/MAIL_USER/MAIL_PASS.',
+      };
+    }
+    if (this.isEthereal) {
+      return { status: 'ok', provider: 'ethereal', detail: 'Ethereal dev account (NOT delivered to real inboxes)' };
+    }
+    if (this.smtpVerified) {
+      return { status: 'ok', provider: 'smtp' };
+    }
+    return {
+      status: 'error',
+      provider: 'smtp',
+      detail:
+        'SMTP verify failed at startup (ETIMEDOUT). ' +
+        'Most likely cause: Gmail SMTP is unreachable from this server due to IPv6 DNS. ' +
+        'Fix: add RESEND_API_KEY to Render environment (https://resend.com).',
+    };
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────
 
   async sendOtpEmail(email: string, username: string, otp: string): Promise<void> {
@@ -291,14 +334,16 @@ export class MailService implements OnModuleInit {
 
   private async sendViaSmtp(payload: MailPayload): Promise<void> {
     if (!this.transporter) {
-      const msg = `Email not sent — no transporter configured (to=${payload.to})`;
-      this.logger.warn(msg);
-      throw new Error(msg);
+      throw new Error(`Email not sent — no transporter configured (to=${payload.to})`);
     }
 
+    // Fast-fail when SMTP verification failed at startup.
+    // Without this, sendMail() would silently wait for the full connectionTimeout
+    // (10 s) before throwing — causing resendOtp() to hang and then return HTTP 500.
     if (!this.smtpVerified && !this.isEthereal) {
-      this.logger.warn(
-        `SMTP verify previously failed — attempting send anyway (to=${payload.to})`,
+      throw new Error(
+        `SMTP is not available (connection failed at startup — likely IPv6 / port-block). ` +
+        `Set RESEND_API_KEY in Render to use the Resend HTTP API instead.`,
       );
     }
 
