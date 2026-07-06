@@ -1,3 +1,11 @@
+// Force IPv4 DNS resolution for all outbound connections.
+// On Render (and some other cloud providers), smtp.gmail.com resolves to an
+// IPv6 address that is unreachable, causing ETIMEDOUT on the TCP connect.
+// This must be set before any module is loaded so the DNS preference is
+// active when Nodemailer creates its SMTP socket.
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
 import { NestFactory, Reflector } from '@nestjs/core';
 import { ValidationPipe, ClassSerializerInterceptor } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
