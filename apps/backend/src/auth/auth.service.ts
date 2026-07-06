@@ -6,6 +6,7 @@ import {
   Inject,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -28,6 +29,8 @@ interface OAuthUserData {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -112,21 +115,20 @@ export class AuthService {
       this.redis.set(`otp:cooldown:${dto.email.toLowerCase()}`, '1', 'EX', 60),
     ]);
 
-    // Fire-and-forget — email delivery takes 1-3s but the user doesn't need to wait
-    // for it; the OTP is already saved in PendingRegistration. If sending fails, the
-    // user can click "Resend" after 60 seconds.
+    // Fire-and-forget — the OTP is already saved; the user doesn't wait for delivery.
+    // If sending fails the user can click Resend after 60 s.
     this.mailService.sendOtpEmail(dto.email, dto.username, otp).catch((err: Error) => {
-      console.warn(`[auth] OTP email failed for ${dto.email}: ${err?.message}`);
+      this.logger.error(`OTP email failed for ${dto.email}: ${err?.message}`);
     });
 
-    // Log to console in dev mode for easy testing without email setup
+    // Print OTP to logs in dev mode so developers can test without real email
     if (this.configService.get<string>('nodeEnv') !== 'production') {
-      console.log('\n========================================');
-      console.log('EMAIL OTP (dev mode)');
-      console.log(`Email: ${dto.email}`);
-      console.log(`OTP: ${otp}`);
-      console.log(`Expires: ${expiresAt.toISOString()}`);
-      console.log('========================================\n');
+      this.logger.debug('========================================');
+      this.logger.debug('EMAIL OTP (dev mode)');
+      this.logger.debug(`Email  : ${dto.email}`);
+      this.logger.debug(`OTP    : ${otp}`);
+      this.logger.debug(`Expires: ${expiresAt.toISOString()}`);
+      this.logger.debug('========================================');
     }
 
     return {
@@ -298,16 +300,15 @@ export class AuthService {
       this.redis.set(cooldownKey, '1', 'EX', 60),
     ]);
 
-    this.mailService.sendOtpEmail(pending.email, pending.username, otp).catch((err: Error) => {
-      console.warn(`[auth] OTP resend email failed for ${email}: ${err?.message}`);
-    });
+    // Awaited — the user explicitly requested a resend and needs confirmation it worked.
+    await this.mailService.sendOtpEmail(pending.email, pending.username, otp);
 
     if (this.configService.get<string>('nodeEnv') !== 'production') {
-      console.log('\n========================================');
-      console.log('EMAIL OTP RESEND (dev mode)');
-      console.log(`Email: ${email}`);
-      console.log(`OTP: ${otp}`);
-      console.log('========================================\n');
+      this.logger.debug('========================================');
+      this.logger.debug('EMAIL OTP RESEND (dev mode)');
+      this.logger.debug(`Email : ${email}`);
+      this.logger.debug(`OTP   : ${otp}`);
+      this.logger.debug('========================================');
     }
 
     return { message: 'A new verification code has been sent to your email.' };
@@ -429,12 +430,12 @@ export class AuthService {
     if (this.mailNotConfigured) {
       // Dev mode: log token so developer can test without SMTP
       const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
-      console.log('\n========================================');
-      console.log('PASSWORD RESET (dev mode — no SMTP)');
-      console.log(`User: ${user.email}`);
-      console.log(`Token: ${token}`);
-      console.log(`URL: ${appUrl}/reset-password?token=${token}`);
-      console.log('========================================\n');
+      this.logger.debug('========================================');
+      this.logger.debug('PASSWORD RESET (dev mode — no SMTP)');
+      this.logger.debug(`User : ${user.email}`);
+      this.logger.debug(`Token: ${token}`);
+      this.logger.debug(`URL  : ${appUrl}/reset-password?token=${token}`);
+      this.logger.debug('========================================');
     } else {
       await this.mailService.sendPasswordResetEmail(user.email, user.username, token);
     }

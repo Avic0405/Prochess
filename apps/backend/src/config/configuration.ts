@@ -52,6 +52,7 @@ export default () => ({
     user: process.env.MAIL_USER,
     pass: process.env.MAIL_PASS,
     from: process.env.MAIL_FROM,
+    resendApiKey: process.env.RESEND_API_KEY,
   },
 
   platform: {
