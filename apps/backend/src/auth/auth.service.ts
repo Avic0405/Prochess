@@ -397,10 +397,10 @@ export class AuthService {
   }
 
   async logout(userId: string) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { refreshTokenHash: null, isOnline: false },
-    });
+    await Promise.all([
+      this.prisma.user.update({ where: { id: userId }, data: { refreshTokenHash: null, isOnline: false } }),
+      this.redis.del(`jwt:user:${userId}`),
+    ]);
     return { message: 'Logged out successfully' };
   }
 

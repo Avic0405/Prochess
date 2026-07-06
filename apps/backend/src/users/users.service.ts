@@ -3,18 +3,22 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Inject,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
 import { FriendRequestStatus } from '@prisma/client';
 import * as path from 'path';
 import * as fs from 'fs';
+import Redis from 'ioredis';
 
 @Injectable()
 export class UsersService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
   async getProfile(username: string, currentUserId?: string) {
@@ -368,17 +372,25 @@ export class UsersService {
   }
 
   async setOnlineStatus(userId: string, isOnline: boolean) {
+    // Dedup: collapse concurrent writes from multiple gateway namespaces into one DB call
+    const lock = `online:write:${userId}:${isOnline ? '1' : '0'}`;
+    const acquired = await this.redis.set(lock, '1', 'EX', 2, 'NX');
+    if (!acquired) return;
+
     await this.prisma.user.update({
       where: { id: userId },
-      data: {
-        isOnline,
-        ...(isOnline ? {} : { lastSeenAt: new Date() }),
-      },
+      data: { isOnline, ...(isOnline ? {} : { lastSeenAt: new Date() }) },
     });
   }
 
   async getLeaderboard(limit = 50) {
-    return this.prisma.user.findMany({
+    const cacheKey = `leaderboard:${limit}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try { return JSON.parse(cached); } catch {}
+    }
+
+    const result = await this.prisma.user.findMany({
       where: { isBanned: false, gamesPlayed: { gt: 0 } },
       orderBy: { rating: 'desc' },
       take: limit,
@@ -387,5 +399,8 @@ export class UsersService {
         gamesPlayed: true, wins: true, losses: true, draws: true,
       },
     });
+
+    await this.redis.setex(cacheKey, 300, JSON.stringify(result));
+    return result;
   }
 }

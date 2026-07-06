@@ -8,10 +8,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { GameStateService, RedisGameState } from './game-state.service';
 import { Chess } from 'chess.js';
 import { GameResult, GameStatus, Currency } from '@prisma/client';
 
 const ELO_K_FACTOR = 32;
+const CHECKPOINT_EVERY = 10;
 
 @Injectable()
 export class GamesService {
@@ -21,6 +23,7 @@ export class GamesService {
     private prisma: PrismaService,
     private notifications: NotificationsService,
     private configService: ConfigService,
+    private gameStateService: GameStateService,
   ) {}
 
   private serializeGame<T extends Record<string, any>>(game: T): T {
@@ -55,6 +58,21 @@ export class GamesService {
         blackPlayer: { select: { id: true, username: true, avatar: true, rating: true } },
       },
     });
+
+    await this.gameStateService.initState({
+      id: game.id,
+      whitePlayer: game.whitePlayer as any,
+      blackPlayer: game.blackPlayer as any,
+      type: 'FREE',
+      stake: null,
+      currency: null,
+      timeMinutes,
+      increment,
+      whiteTimeLeft: timeSeconds,
+      blackTimeLeft: timeSeconds,
+      startedAt: game.startedAt ?? new Date(),
+    }).catch(err => this.logger.error(`Redis init failed for ${game.id}: ${err.message}`));
+
     return this.serializeGame(game);
   }
 
@@ -72,30 +90,16 @@ export class GamesService {
     const increment = options.increment ?? 0;
     const timeSeconds = timeMinutes * 60;
 
-    // Validate both players have a wallet for the game currency with sufficient balance
     const [whiteWallet, blackWallet] = await Promise.all([
       this.prisma.wallet.findFirst({ where: { userId: whitePlayerId, currency: options.currency } }),
       this.prisma.wallet.findFirst({ where: { userId: blackPlayerId, currency: options.currency } }),
     ]);
 
-    if (!whiteWallet) {
-      throw new BadRequestException(
-        `White player does not have a ${options.currency} wallet`,
-      );
-    }
-    if (!blackWallet) {
-      throw new BadRequestException(
-        `Black player does not have a ${options.currency} wallet`,
-      );
-    }
-    if (Number(whiteWallet.balance) < options.stake) {
-      throw new BadRequestException('White player has insufficient balance');
-    }
-    if (Number(blackWallet.balance) < options.stake) {
-      throw new BadRequestException('Black player has insufficient balance');
-    }
+    if (!whiteWallet) throw new BadRequestException(`White player does not have a ${options.currency} wallet`);
+    if (!blackWallet) throw new BadRequestException(`Black player does not have a ${options.currency} wallet`);
+    if (Number(whiteWallet.balance) < options.stake) throw new BadRequestException('White player has insufficient balance');
+    if (Number(blackWallet.balance) < options.stake) throw new BadRequestException('Black player has insufficient balance');
 
-    // Create game and lock escrow in a transaction
     const game = await this.prisma.$transaction(async (tx) => {
       const newGame = await tx.game.create({
         data: {
@@ -122,62 +126,65 @@ export class GamesService {
         },
       });
 
-      // Lock funds for both players (by wallet ID, not userId)
       await tx.wallet.update({
         where: { id: whiteWallet.id },
-        data: {
-          balance: { decrement: options.stake },
-          lockedBalance: { increment: options.stake },
-        },
+        data: { balance: { decrement: options.stake }, lockedBalance: { increment: options.stake } },
       });
       await tx.wallet.update({
         where: { id: blackWallet.id },
-        data: {
-          balance: { decrement: options.stake },
-          lockedBalance: { increment: options.stake },
-        },
+        data: { balance: { decrement: options.stake }, lockedBalance: { increment: options.stake } },
       });
-
-      // Record escrow transactions
       await tx.transaction.createMany({
         data: [
-          {
-            walletId: whiteWallet.id,
-            gameId: newGame.id,
-            amount: options.stake,
-            currency: options.currency,
-            type: 'GAME_STAKE',
-            status: 'COMPLETED',
-            description: `Escrow for paid game`,
-          },
-          {
-            walletId: blackWallet.id,
-            gameId: newGame.id,
-            amount: options.stake,
-            currency: options.currency,
-            type: 'GAME_STAKE',
-            status: 'COMPLETED',
-            description: `Escrow for paid game`,
-          },
+          { walletId: whiteWallet.id, gameId: newGame.id, amount: options.stake, currency: options.currency, type: 'GAME_STAKE', status: 'COMPLETED', description: 'Escrow for paid game' },
+          { walletId: blackWallet.id, gameId: newGame.id, amount: options.stake, currency: options.currency, type: 'GAME_STAKE', status: 'COMPLETED', description: 'Escrow for paid game' },
         ],
       });
 
       return newGame;
     });
 
+    await this.gameStateService.initState({
+      id: game.id,
+      whitePlayer: game.whitePlayer as any,
+      blackPlayer: game.blackPlayer as any,
+      type: 'PAID',
+      stake: options.stake,
+      currency: options.currency,
+      timeMinutes,
+      increment,
+      whiteTimeLeft: timeSeconds,
+      blackTimeLeft: timeSeconds,
+      startedAt: game.startedAt ?? new Date(),
+    }).catch(err => this.logger.error(`Redis init failed for ${game.id}: ${err.message}`));
+
     return this.serializeGame(game);
   }
 
   async getGame(gameId: string) {
+    // Serve active game from Redis (no DB round-trip)
+    const state = await this.gameStateService.getState(gameId);
+    if (state && state.status === 'ACTIVE') {
+      const chatMessages = await this.prisma.chatMessage.findMany({
+        where: { gameId },
+        include: { sender: { select: { username: true, avatar: true } } },
+        orderBy: { createdAt: 'asc' },
+        take: 200,
+      });
+      return this.serializeGame(this.gameStateService.toGameShape(state, chatMessages));
+    }
+
+    // Completed / not-in-Redis: serve from Postgres with pagination
     const game = await this.prisma.game.findUnique({
       where: { id: gameId },
       include: {
         whitePlayer: { select: { id: true, username: true, avatar: true, rating: true } },
         blackPlayer: { select: { id: true, username: true, avatar: true, rating: true } },
-        moves: { orderBy: { moveNum: 'asc' } },
+        moves: { orderBy: { moveNum: 'asc' }, take: 500 },
         chatMessages: {
           include: { sender: { select: { username: true, avatar: true } } },
           orderBy: { createdAt: 'asc' },
+          take: 200,
         },
       },
     });
@@ -187,6 +194,12 @@ export class GamesService {
   }
 
   async getActiveGame(userId: string) {
+    // Try Redis index first
+    const gameId = await this.gameStateService.getActiveGameIdForUser(userId);
+    if (gameId) {
+      try { return await this.getGame(gameId); } catch { /* stale index — fall through */ }
+    }
+
     const game = await this.prisma.game.findFirst({
       where: {
         OR: [{ whitePlayerId: userId }, { blackPlayerId: userId }],
@@ -195,10 +208,11 @@ export class GamesService {
       include: {
         whitePlayer: { select: { id: true, username: true, avatar: true, rating: true } },
         blackPlayer: { select: { id: true, username: true, avatar: true, rating: true } },
-        moves: { orderBy: { moveNum: 'asc' } },
+        moves: { orderBy: { moveNum: 'asc' }, take: 500 },
         chatMessages: {
           include: { sender: { select: { username: true, avatar: true } } },
           orderBy: { createdAt: 'asc' },
+          take: 200,
         },
       },
       orderBy: { startedAt: 'desc' },
@@ -210,28 +224,25 @@ export class GamesService {
     gameId: string,
     userId: string,
     move: { from: string; to: string; promotion?: string },
+    timeLeft?: number,
   ) {
-    const game = await this.prisma.game.findUnique({
-      where: { id: gameId },
-      include: {
-        whitePlayer: { select: { id: true, username: true } },
-        blackPlayer: { select: { id: true, username: true } },
-      },
-    });
+    const t0 = Date.now();
 
-    if (!game) throw new NotFoundException('Game not found');
-    if (game.status !== 'ACTIVE') throw new BadRequestException('Game is not active');
+    // Load from Redis — no DB read
+    const state = await this.gameStateService.getState(gameId);
+    if (!state) throw new NotFoundException('Game not found or not active');
+    if (state.status !== 'ACTIVE') throw new BadRequestException('Game is not active');
 
-    const isWhite = game.whitePlayerId === userId;
-    const isBlack = game.blackPlayerId === userId;
+    const isWhite = state.whitePlayer.id === userId;
+    const isBlack = state.blackPlayer.id === userId;
     if (!isWhite && !isBlack) throw new ForbiddenException('Not a player in this game');
 
     const isPlayerTurn =
-      (game.currentTurn === 'w' && isWhite) ||
-      (game.currentTurn === 'b' && isBlack);
+      (state.currentTurn === 'w' && isWhite) ||
+      (state.currentTurn === 'b' && isBlack);
     if (!isPlayerTurn) throw new BadRequestException("Not your turn");
 
-    const chess = new Chess(game.fen ?? undefined);
+    const chess = new Chess(state.fen ?? undefined);
     let result;
     try {
       result = chess.move({
@@ -242,61 +253,145 @@ export class GamesService {
     } catch {
       throw new BadRequestException('Invalid move');
     }
-
     if (!result) throw new BadRequestException('Illegal move');
 
-    const newFen = chess.fen();
-    const newTurn = chess.turn();
-    const moveNum = game.moveCount + 1;
+    const moveCount = state.moveCount + 1;
 
-    let status: GameStatus = 'ACTIVE';
+    // Update clocks: mover's time comes from client; opponent's time is unchanged
+    const newWhiteTime = isWhite
+      ? Math.max(0, timeLeft !== undefined ? timeLeft : state.whiteTimeLeft)
+      : state.whiteTimeLeft;
+    const newBlackTime = !isWhite
+      ? Math.max(0, timeLeft !== undefined ? timeLeft : state.blackTimeLeft)
+      : state.blackTimeLeft;
+
+    let status = 'ACTIVE';
     let gameResult: GameResult | null = null;
     let winnerId: string | null = null;
 
     if (chess.isCheckmate()) {
       status = 'COMPLETED';
       gameResult = isWhite ? 'WHITE_WINS' : 'BLACK_WINS';
-      winnerId = isWhite ? game.whitePlayerId : game.blackPlayerId;
+      winnerId = isWhite ? state.whitePlayer.id : state.blackPlayer.id;
     } else if (chess.isDraw() || chess.isStalemate() || chess.isThreefoldRepetition()) {
       status = 'COMPLETED';
       gameResult = 'DRAW';
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.move.create({
-        data: { gameId, moveNum, san: result!.san, uci: `${move.from}${move.to}${move.promotion ?? ''}`, fen: newFen },
-      });
-
-      await tx.game.update({
-        where: { id: gameId },
-        data: {
-          fen: newFen,
-          currentTurn: newTurn,
-          moveCount: moveNum,
-          pgn: chess.pgn(),
-          lastMoveAt: new Date(),
-          ...(status === 'COMPLETED' && { status, result: gameResult, winnerId, endedAt: new Date() }),
-        },
-      });
+    // Write to Redis — no Postgres write on a normal move
+    const newState = await this.gameStateService.applyMove(gameId, {
+      fen: chess.fen(),
+      pgn: chess.pgn(),
+      san: result.san,
+      uci: `${move.from}${move.to}${move.promotion ?? ''}`,
+      turn: chess.turn(),
+      moveCount,
+      whiteTimeLeft: newWhiteTime,
+      blackTimeLeft: newBlackTime,
+      status,
+      result: gameResult,
+      winnerId,
     });
 
+    this.logger.debug(
+      `makeMove game=${gameId} move=${moveCount} status=${status} latency=${Date.now() - t0}ms`,
+    );
+
     if (status === 'COMPLETED') {
-      await this.handleGameCompletion(gameId, gameResult!, game);
+      await this.completeGameFromState(gameId, newState, gameResult!, winnerId);
+    } else if (moveCount % CHECKPOINT_EVERY === 0) {
+      // Fire-and-forget checkpoint every 10 moves
+      this.gameStateService.checkpoint(gameId, newState).catch(err =>
+        this.logger.error(`Checkpoint error game=${gameId}: ${err.message}`),
+      );
     }
 
     return {
       move: result,
-      fen: newFen,
+      fen: chess.fen(),
       pgn: chess.pgn(),
       status,
       result: gameResult,
       isCheck: chess.isCheck(),
       isCheckmate: chess.isCheckmate(),
       isDraw: chess.isDraw(),
+      moveCount,
+      whiteTimeLeft: newWhiteTime,
+      blackTimeLeft: newBlackTime,
+      whitePlayerId: state.whitePlayer.id,
+      blackPlayerId: state.blackPlayer.id,
     };
   }
 
   async resignGame(gameId: string, userId: string) {
+    const state = await this.gameStateService.getState(gameId);
+
+    if (!state) {
+      // Fallback: game not in Redis (pre-migration or Redis outage)
+      return this.resignGameFromDb(gameId, userId);
+    }
+
+    if (state.status !== 'ACTIVE') throw new BadRequestException('Game not active');
+
+    const isWhite = state.whitePlayer.id === userId;
+    const isBlack = state.blackPlayer.id === userId;
+    if (!isWhite && !isBlack) throw new ForbiddenException();
+
+    const gameResult: GameResult = isWhite ? 'BLACK_WINS' : 'WHITE_WINS';
+    const winnerId = isWhite ? state.blackPlayer.id : state.whitePlayer.id;
+
+    await this.completeGameFromState(gameId, state, gameResult, winnerId);
+    return { result: gameResult, winnerId };
+  }
+
+  async offerDraw(gameId: string, userId: string) {
+    // Validate using Redis first, fall back to DB
+    const state = await this.gameStateService.getState(gameId);
+    if (state) {
+      if (state.status !== 'ACTIVE') throw new BadRequestException('Game not active');
+      if (state.whitePlayer.id !== userId && state.blackPlayer.id !== userId) throw new ForbiddenException();
+    } else {
+      const game = await this.prisma.game.findUnique({ where: { id: gameId } });
+      if (!game) throw new NotFoundException('Game not found');
+      if (game.status !== 'ACTIVE') throw new BadRequestException('Game not active');
+      if (game.whitePlayerId !== userId && game.blackPlayerId !== userId) throw new ForbiddenException();
+    }
+    return { gameId, offeredBy: userId };
+  }
+
+  async acceptDraw(gameId: string, userId: string) {
+    const state = await this.gameStateService.getState(gameId);
+
+    if (!state) {
+      return this.acceptDrawFromDb(gameId, userId);
+    }
+
+    if (state.status !== 'ACTIVE') throw new BadRequestException('Game not active');
+
+    await this.completeGameFromState(gameId, state, 'DRAW' as GameResult, null);
+    return { result: 'DRAW' };
+  }
+
+  async handleTimeout(gameId: string, timedOutUserId: string) {
+    const state = await this.gameStateService.getState(gameId);
+
+    if (!state) {
+      return this.handleTimeoutFromDb(gameId, timedOutUserId);
+    }
+
+    if (state.status !== 'ACTIVE') return null;
+
+    const isWhite = state.whitePlayer.id === timedOutUserId;
+    const gameResult: GameResult = isWhite ? 'BLACK_WINS' : 'WHITE_WINS';
+    const winnerId = isWhite ? state.blackPlayer.id : state.whitePlayer.id;
+
+    await this.completeGameFromState(gameId, state, gameResult, winnerId);
+    return { result: gameResult, winnerId };
+  }
+
+  // ── DB fallback helpers (for games not in Redis) ──────────────────────────
+
+  private async resignGameFromDb(gameId: string, userId: string) {
     const game = await this.prisma.game.findUnique({ where: { id: gameId } });
     if (!game) throw new NotFoundException('Game not found');
     if (game.status !== 'ACTIVE') throw new BadRequestException('Game not active');
@@ -308,38 +403,22 @@ export class GamesService {
     const gameResult: GameResult = isWhite ? 'BLACK_WINS' : 'WHITE_WINS';
     const winnerId = isWhite ? game.blackPlayerId : game.whitePlayerId;
 
-    await this.prisma.game.update({
-      where: { id: gameId },
-      data: { status: 'COMPLETED', result: gameResult, winnerId, endedAt: new Date() },
-    });
-
+    await this.prisma.game.update({ where: { id: gameId }, data: { status: 'COMPLETED', result: gameResult, winnerId, endedAt: new Date() } });
     await this.handleGameCompletion(gameId, gameResult, { ...game, winnerId });
     return { result: gameResult, winnerId };
   }
 
-  async offerDraw(gameId: string, userId: string) {
-    const game = await this.prisma.game.findUnique({ where: { id: gameId } });
-    if (!game) throw new NotFoundException('Game not found');
-    if (game.status !== 'ACTIVE') throw new BadRequestException('Game not active');
-    if (game.whitePlayerId !== userId && game.blackPlayerId !== userId) throw new ForbiddenException();
-    return { gameId, offeredBy: userId };
-  }
-
-  async acceptDraw(gameId: string, userId: string) {
+  private async acceptDrawFromDb(gameId: string, _userId: string) {
     const game = await this.prisma.game.findUnique({ where: { id: gameId } });
     if (!game) throw new NotFoundException();
     if (game.status !== 'ACTIVE') throw new BadRequestException('Game not active');
 
-    await this.prisma.game.update({
-      where: { id: gameId },
-      data: { status: 'COMPLETED', result: 'DRAW', endedAt: new Date() },
-    });
-
+    await this.prisma.game.update({ where: { id: gameId }, data: { status: 'COMPLETED', result: 'DRAW', endedAt: new Date() } });
     await this.handleGameCompletion(gameId, 'DRAW', game);
     return { result: 'DRAW' };
   }
 
-  async handleTimeout(gameId: string, timedOutUserId: string) {
+  private async handleTimeoutFromDb(gameId: string, timedOutUserId: string) {
     const game = await this.prisma.game.findUnique({ where: { id: gameId } });
     if (!game || game.status !== 'ACTIVE') return null;
 
@@ -347,14 +426,37 @@ export class GamesService {
     const gameResult: GameResult = isWhite ? 'BLACK_WINS' : 'WHITE_WINS';
     const winnerId = isWhite ? game.blackPlayerId : game.whitePlayerId;
 
-    await this.prisma.game.update({
-      where: { id: gameId },
-      data: { status: 'COMPLETED', result: gameResult, winnerId, endedAt: new Date() },
-    });
-
+    await this.prisma.game.update({ where: { id: gameId }, data: { status: 'COMPLETED', result: gameResult, winnerId, endedAt: new Date() } });
     await this.handleGameCompletion(gameId, gameResult, { ...game, winnerId });
     return { result: gameResult, winnerId };
   }
+
+  // ── Complete a Redis-tracked game ─────────────────────────────────────────
+
+  private async completeGameFromState(
+    gameId: string,
+    state: RedisGameState,
+    result: GameResult,
+    winnerId: string | null,
+  ): Promise<void> {
+    const finalState = await this.gameStateService.terminateGame(gameId, result, winnerId);
+    if (!finalState) return;
+
+    await this.gameStateService.persistCompletion(gameId, finalState);
+
+    await this.handleGameCompletion(gameId, result, {
+      whitePlayerId: state.whitePlayer.id,
+      blackPlayerId: state.blackPlayer.id,
+      winnerId,
+      type: state.type,
+      stake: state.stake,
+      currency: state.currency as Currency | null,
+    });
+
+    await this.gameStateService.cleanup(gameId, state.whitePlayer.id, state.blackPlayer.id);
+  }
+
+  // ── ELO + notifications (called after DB write) ───────────────────────────
 
   private async handleGameCompletion(
     gameId: string,
@@ -392,28 +494,15 @@ export class GamesService {
           ...(result === 'DRAW' && { draws: { increment: 1 } }),
         },
       }),
-      this.prisma.ratingHistory.create({
-        data: { userId: game.whitePlayerId, rating: newWhiteRating, change: whiteChange, gameId },
-      }),
-      this.prisma.ratingHistory.create({
-        data: { userId: game.blackPlayerId, rating: newBlackRating, change: blackChange, gameId },
-      }),
+      this.prisma.ratingHistory.create({ data: { userId: game.whitePlayerId, rating: newWhiteRating, change: whiteChange, gameId } }),
+      this.prisma.ratingHistory.create({ data: { userId: game.blackPlayerId, rating: newBlackRating, change: blackChange, gameId } }),
     ]);
 
-    // Release escrow for paid games
     if (game.type === 'PAID' && game.stake) {
-      await this.releaseEscrow(
-        gameId,
-        game.winnerId ?? null,
-        game.whitePlayerId,
-        game.blackPlayerId,
-        Number(game.stake),
-        game.currency ?? Currency.USD,
-      );
+      await this.releaseEscrow(gameId, game.winnerId ?? null, game.whitePlayerId, game.blackPlayerId, Number(game.stake), game.currency ?? Currency.USD);
     }
 
-    const winnerId = game.winnerId;
-    const resultText = result === 'DRAW' ? 'Draw' : winnerId === game.whitePlayerId ? 'You won!' : 'You lost';
+    const resultText = result === 'DRAW' ? 'Draw' : game.winnerId === game.whitePlayerId ? 'You won!' : 'You lost';
 
     await Promise.all([
       this.notifications.create(game.whitePlayerId, {
@@ -449,31 +538,14 @@ export class GamesService {
         this.prisma.wallet.findFirst({ where: { userId: winnerId, currency } }),
         this.prisma.wallet.findFirst({ where: { userId: loserId, currency } }),
       ]);
-
       if (!winnerWallet || !loserWallet) return;
 
       await this.prisma.$transaction([
-        this.prisma.wallet.update({
-          where: { id: loserWallet.id },
-          data: { lockedBalance: { decrement: stake } },
-        }),
-        this.prisma.wallet.update({
-          where: { id: winnerWallet.id },
-          data: { lockedBalance: { decrement: stake }, balance: { increment: winnerAmount } },
-        }),
-        this.prisma.transaction.create({
-          data: {
-            walletId: winnerWallet.id,
-            gameId,
-            amount: winnerAmount,
-            type: 'GAME_WIN',
-            status: 'COMPLETED',
-            description: `Won game (${commission * 100}% platform fee deducted)`,
-          },
-        }),
+        this.prisma.wallet.update({ where: { id: loserWallet.id }, data: { lockedBalance: { decrement: stake } } }),
+        this.prisma.wallet.update({ where: { id: winnerWallet.id }, data: { lockedBalance: { decrement: stake }, balance: { increment: winnerAmount } } }),
+        this.prisma.transaction.create({ data: { walletId: winnerWallet.id, gameId, amount: winnerAmount, type: 'GAME_WIN', status: 'COMPLETED', description: `Won game (${commission * 100}% platform fee deducted)` } }),
       ]);
     } else {
-      // Draw: refund both minus 2% fee
       const refund = stake * 0.98;
       const [whiteWallet, blackWallet] = await Promise.all([
         this.prisma.wallet.findFirst({ where: { userId: whitePlayerId, currency } }),
@@ -482,34 +554,12 @@ export class GamesService {
       if (!whiteWallet || !blackWallet) return;
 
       await this.prisma.$transaction([
-        this.prisma.wallet.update({
-          where: { id: whiteWallet.id },
-          data: { lockedBalance: { decrement: stake }, balance: { increment: refund } },
-        }),
-        this.prisma.wallet.update({
-          where: { id: blackWallet.id },
-          data: { lockedBalance: { decrement: stake }, balance: { increment: refund } },
-        }),
-        this.prisma.transaction.createMany({
-          data: [
-            {
-              walletId: whiteWallet.id,
-              gameId,
-              amount: refund,
-              type: 'GAME_REFUND',
-              status: 'COMPLETED',
-              description: 'Draw refund',
-            },
-            {
-              walletId: blackWallet.id,
-              gameId,
-              amount: refund,
-              type: 'GAME_REFUND',
-              status: 'COMPLETED',
-              description: 'Draw refund',
-            },
-          ],
-        }),
+        this.prisma.wallet.update({ where: { id: whiteWallet.id }, data: { lockedBalance: { decrement: stake }, balance: { increment: refund } } }),
+        this.prisma.wallet.update({ where: { id: blackWallet.id }, data: { lockedBalance: { decrement: stake }, balance: { increment: refund } } }),
+        this.prisma.transaction.createMany({ data: [
+          { walletId: whiteWallet.id, gameId, amount: refund, type: 'GAME_REFUND', status: 'COMPLETED', description: 'Draw refund' },
+          { walletId: blackWallet.id, gameId, amount: refund, type: 'GAME_REFUND', status: 'COMPLETED', description: 'Draw refund' },
+        ] }),
       ]);
     }
   }
@@ -517,7 +567,6 @@ export class GamesService {
   private calculateElo(whiteRating: number, blackRating: number, result: GameResult) {
     const expectedWhite = 1 / (1 + Math.pow(10, (blackRating - whiteRating) / 400));
     const actualWhite = result === 'WHITE_WINS' ? 1 : result === 'BLACK_WINS' ? 0 : 0.5;
-
     return {
       newWhiteRating: Math.max(100, Math.round(whiteRating + ELO_K_FACTOR * (actualWhite - expectedWhite))),
       newBlackRating: Math.max(100, Math.round(blackRating + ELO_K_FACTOR * ((1 - actualWhite) - (1 - expectedWhite)))),

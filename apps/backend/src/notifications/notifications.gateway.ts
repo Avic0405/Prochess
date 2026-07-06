@@ -3,23 +3,31 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Logger } from '@nestjs/common';
+import { Logger, Inject } from '@nestjs/common';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { PrismaService } from '../prisma/prisma.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import Redis from 'ioredis';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
 }
 
+const WS_ORIGINS = (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:3001')
+  .split(',').map((s: string) => s.trim()).filter(Boolean);
+
 @WebSocketGateway({
-  cors: { origin: '*', credentials: true },
+  cors: { origin: WS_ORIGINS, credentials: true },
   namespace: '/notifications',
+  transports: ['websocket'],
 })
 export class NotificationsGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(NotificationsGateway.name);
@@ -28,7 +36,15 @@ export class NotificationsGateway
     private jwtService: JwtService,
     private configService: ConfigService,
     private prisma: PrismaService,
+    @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
+
+  afterInit(server: Server) {
+    const pub = this.redis.duplicate();
+    const sub = this.redis.duplicate();
+    server.adapter(createAdapter(pub, sub));
+    this.logger.log('✓ Notifications WS Gateway initialized (Redis adapter)');
+  }
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
@@ -42,11 +58,12 @@ export class NotificationsGateway
       client.userId = payload.sub;
       client.join(`notifications:${payload.sub}`);
 
-      // Mark user online whenever they load any authenticated page
-      await this.prisma.user.update({
-        where: { id: payload.sub },
-        data: { isOnline: true },
-      });
+      // Dedup: collapse concurrent online-status writes (same user connecting to multiple namespaces)
+      const lock = `online:write:${payload.sub}:1`;
+      const acquired = await this.redis.set(lock, '1', 'EX', 2, 'NX');
+      if (acquired) {
+        await this.prisma.user.update({ where: { id: payload.sub }, data: { isOnline: true } });
+      }
     } catch {
       client.disconnect(true);
     }
@@ -55,10 +72,14 @@ export class NotificationsGateway
   async handleDisconnect(client: AuthenticatedSocket) {
     this.logger.debug(`Notifications client disconnected: ${client.id}`);
     if (client.userId) {
-      await this.prisma.user.update({
-        where: { id: client.userId },
-        data: { isOnline: false, lastSeenAt: new Date() },
-      }).catch(() => {});
+      const lock = `online:write:${client.userId}:0`;
+      const acquired = await this.redis.set(lock, '1', 'EX', 2, 'NX');
+      if (acquired) {
+        await this.prisma.user.update({
+          where: { id: client.userId },
+          data: { isOnline: false, lastSeenAt: new Date() },
+        }).catch(() => {});
+      }
     }
   }
 

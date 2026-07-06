@@ -12,16 +12,23 @@ import {
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Logger } from '@nestjs/common';
+import { Logger, Inject } from '@nestjs/common';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { MatchmakingService } from './matchmaking.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import Redis from 'ioredis';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
 }
 
+const WS_ORIGINS = (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:3001')
+  .split(',').map((s: string) => s.trim()).filter(Boolean);
+
 @WebSocketGateway({
-  cors: { origin: '*', credentials: true },
+  cors: { origin: WS_ORIGINS, credentials: true },
   namespace: '/matchmaking',
+  transports: ['websocket'],
 })
 export class MatchmakingGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -33,9 +40,16 @@ export class MatchmakingGateway
     private matchmakingService: MatchmakingService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
-  afterInit() {
+  afterInit(server: Server) {
+    const pub = this.redis.duplicate();
+    const sub = this.redis.duplicate();
+    server.adapter(createAdapter(pub, sub));
+    this.logger.log('✓ Matchmaking WS Gateway initialized (Redis adapter)');
+
+    // Re-poll all queues every 30 s to catch unmatched players
     setInterval(async () => {
       try {
         const matched = await this.matchmakingService.rePollAllQueues();
@@ -87,7 +101,6 @@ export class MatchmakingGateway
     const result = await this.matchmakingService.joinQueue(client.userId, data as any);
 
     if ('game' in result) {
-      // Notify both players
       const opponentId = (result as any).opponentId;
       this.server.to(`user:${client.userId}`).emit('match_found', result);
       if (opponentId) {
@@ -120,7 +133,6 @@ export class MatchmakingGateway
     if (!client.userId) throw new WsException('Unauthorized');
     const result = await this.matchmakingService.inviteFriend(client.userId, data.inviteeId, data as any);
 
-    // Tell invitee about the challenge
     this.server.to(`user:${data.inviteeId}`).emit('invite_received', {
       inviteId: result.inviteId,
       inviterId: client.userId,
@@ -133,10 +145,8 @@ export class MatchmakingGateway
       },
     });
 
-    // Confirm back to inviter with the inviteId (reliable — no ack callback needed)
     this.server.to(`user:${client.userId}`).emit('invite_sent', { inviteId: result.inviteId });
 
-    // Emit invite_expired after 60s if still in Redis (invitee never responded)
     setTimeout(async () => {
       const still = await this.matchmakingService.getInvite(result.inviteId);
       if (still) {

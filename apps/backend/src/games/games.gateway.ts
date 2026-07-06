@@ -13,7 +13,9 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Logger, Inject } from '@nestjs/common';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { GamesService } from './games.service';
+import { GameStateService } from './game-state.service';
 import { UsersService } from '../users/users.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
@@ -24,9 +26,13 @@ interface AuthenticatedSocket extends Socket {
   username?: string;
 }
 
+const WS_ORIGINS = (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:3001')
+  .split(',').map((s: string) => s.trim()).filter(Boolean);
+
 @WebSocketGateway({
-  cors: { origin: '*', credentials: true },
+  cors: { origin: WS_ORIGINS, credentials: true },
   namespace: '/game',
+  transports: ['websocket'],
 })
 export class GamesGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -37,6 +43,7 @@ export class GamesGateway
 
   constructor(
     private gamesService: GamesService,
+    private gameStateService: GameStateService,
     private usersService: UsersService,
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -44,8 +51,11 @@ export class GamesGateway
     @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
-  afterInit() {
-    this.logger.log('Game WebSocket Gateway initialized');
+  afterInit(server: Server) {
+    const pub = this.redis.duplicate();
+    const sub = this.redis.duplicate();
+    server.adapter(createAdapter(pub, sub));
+    this.logger.log('✓ Game WS Gateway initialized (Redis adapter)');
   }
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -63,13 +73,12 @@ export class GamesGateway
       client.userId = payload.sub;
       client.username = payload.username;
 
-      // Track socket ID → userId
       await this.redis.set(`socket:user:${payload.sub}`, client.id, 'EX', 86400);
       await this.redis.sadd('online:users', payload.sub);
       await this.usersService.setOnlineStatus(payload.sub, true);
 
-      // Allow targeting user by userId room for notifications from gateway
       client.join(`user:${payload.sub}`);
+      this.logger.debug(`User ${payload.sub} connected to /game`);
     } catch {
       client.disconnect(true);
     }
@@ -82,36 +91,35 @@ export class GamesGateway
     await this.redis.srem('online:users', client.userId);
     await this.redis.del(`socket:user:${client.userId}`);
 
-    // Find active games for this player
-    const activeGames = await this.prisma.game.findMany({
-      where: {
-        OR: [{ whitePlayerId: client.userId }, { blackPlayerId: client.userId }],
-        status: 'ACTIVE',
-      },
-    });
+    // Use Redis index instead of full Postgres table scan
+    const gameId = await this.gameStateService.getActiveGameIdForUser(client.userId);
+    if (gameId) {
+      const state = await this.gameStateService.getState(gameId);
+      if (state && state.status === 'ACTIVE') {
+        this.server.to(`game:${gameId}`).emit('player_disconnected', {
+          userId: client.userId,
+          gameId,
+          gracePeriod: 60,
+        });
 
-    for (const game of activeGames) {
-      this.server.to(`game:${game.id}`).emit('player_disconnected', {
-        userId: client.userId,
-        gameId: game.id,
-        gracePeriod: 60,
-      });
-
-      // 60-second grace period before forfeit
-      const timerKey = `${game.id}:${client.userId}`;
-      const timer = setTimeout(async () => {
-        const current = await this.prisma.game.findUnique({ where: { id: game.id } });
-        if (current?.status === 'ACTIVE') {
-          const result = await this.gamesService.handleTimeout(game.id, client.userId!);
-          if (result) {
-            this.server.to(`game:${game.id}`).emit('game_over', { ...result, reason: 'disconnect' });
+        const timerKey = `${gameId}:${client.userId}`;
+        const timer = setTimeout(async () => {
+          // Check Redis — no Postgres query needed
+          const current = await this.gameStateService.getState(gameId);
+          if (current?.status === 'ACTIVE') {
+            const result = await this.gamesService.handleTimeout(gameId, client.userId!);
+            if (result) {
+              this.server.to(`game:${gameId}`).emit('game_over', { ...result, reason: 'disconnect' });
+            }
           }
-        }
-        this.disconnectTimers.delete(timerKey);
-      }, 60_000);
+          this.disconnectTimers.delete(timerKey);
+        }, 60_000);
 
-      this.disconnectTimers.set(timerKey, timer);
+        this.disconnectTimers.set(timerKey, timer);
+      }
     }
+
+    this.logger.debug(`User ${client.userId} disconnected from /game`);
   }
 
   @SubscribeMessage('join_game')
@@ -125,14 +133,10 @@ export class GamesGateway
 
     const isWhite = game.whitePlayerId === client.userId;
     const isBlack = game.blackPlayerId === client.userId;
-    const isPlayer = isWhite || isBlack;
-
-    // Determine player color
     const playerColor = isWhite ? 'white' : isBlack ? 'black' : null;
 
     client.join(`game:${data.gameId}`);
 
-    // Cancel disconnect timer on reconnect
     const timerKey = `${data.gameId}:${client.userId}`;
     if (this.disconnectTimers.has(timerKey)) {
       clearTimeout(this.disconnectTimers.get(timerKey)!);
@@ -142,7 +146,7 @@ export class GamesGateway
 
     return {
       event: 'game_joined',
-      data: { game, isPlayer, playerColor },
+      data: { game, isPlayer: isWhite || isBlack, playerColor },
     };
   }
 
@@ -160,53 +164,43 @@ export class GamesGateway
   ) {
     if (!client.userId) throw new WsException('Unauthorized');
 
-    const result = await this.gamesService.makeMove(data.gameId, client.userId, {
-      from: data.from,
-      to: data.to,
-      promotion: data.promotion,
-    });
+    const t0 = Date.now();
 
-    // Persist remaining time for both players atomically
-    const game = await this.prisma.game.findUnique({ where: { id: data.gameId } });
-    if (game) {
-      const isWhite = game.whitePlayerId === client.userId;
-      const newWhiteTime = isWhite ? Math.max(0, data.timeLeft) : (game.whiteTimeLeft ?? 0);
-      const newBlackTime = !isWhite ? Math.max(0, data.timeLeft) : (game.blackTimeLeft ?? 0);
+    // Single service call — clocks updated in Redis, no duplicate DB queries
+    const result = await this.gamesService.makeMove(
+      data.gameId,
+      client.userId,
+      { from: data.from, to: data.to, promotion: data.promotion },
+      data.timeLeft,
+    );
 
-      await this.prisma.game.update({
-        where: { id: data.gameId },
-        data: { whiteTimeLeft: newWhiteTime, blackTimeLeft: newBlackTime },
-      });
+    this.logger.debug(
+      `move_made game=${data.gameId} move=${result.moveCount} gw_latency=${Date.now() - t0}ms`,
+    );
 
-      this.server.to(`game:${data.gameId}`).emit('move_made', {
+    this.server.to(`game:${data.gameId}`).emit('move_made', {
+      fen: result.fen,
+      pgn: result.pgn,
+      status: result.status,
+      result: result.result,
+      isCheck: result.isCheck,
+      isCheckmate: result.isCheckmate,
+      isDraw: result.isDraw,
+      move: {
+        id: `${data.gameId}-${result.moveCount}`,
+        moveNum: result.moveCount,
+        san: result.move.san,
+        uci: `${data.from}${data.to}${data.promotion ?? ''}`,
         fen: result.fen,
-        pgn: result.pgn,
-        status: result.status,
-        result: result.result,
-        isCheck: result.isCheck,
-        isCheckmate: result.isCheckmate,
-        isDraw: result.isDraw,
-        move: {
-          id: `${data.gameId}-${game.moveCount}`,
-          moveNum: game.moveCount,
-          san: result.move.san,
-          uci: `${data.from}${data.to}${data.promotion ?? ''}`,
-          fen: result.fen,
-          from: result.move.from,
-          to: result.move.to,
-          timeTaken: 0,
-          createdAt: new Date().toISOString(),
-        },
-        playerId: client.userId,
-        whiteTime: newWhiteTime,
-        blackTime: newBlackTime,
-      });
-    } else {
-      this.server.to(`game:${data.gameId}`).emit('move_made', {
-        ...result,
-        playerId: client.userId,
-      });
-    }
+        from: result.move.from,
+        to: result.move.to,
+        timeTaken: 0,
+        createdAt: new Date().toISOString(),
+      },
+      playerId: client.userId,
+      whiteTime: result.whiteTimeLeft,
+      blackTime: result.blackTimeLeft,
+    });
 
     if (result.status === 'COMPLETED') {
       this.server.to(`game:${data.gameId}`).emit('game_over', {
