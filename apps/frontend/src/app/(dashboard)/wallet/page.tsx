@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import api from '@/lib/api';
@@ -11,6 +11,7 @@ import { Wallet, ArrowDownLeft, ArrowUpRight, Lock, Clock, Plus, Check, RefreshC
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
 import { Currency } from '@/types';
+import { trackWalletOpened } from '@/lib/analytics/events';
 
 const TYPE_LABELS: Record<string, string> = {
   DEPOSIT: 'Deposit',
@@ -84,6 +85,13 @@ export default function WalletPage() {
   const activeWallet = wallets.find((w) => w.isActive) ?? wallets[0];
   const existingCurrencies = new Set(wallets.map((w) => w.currency));
   const availableCurrencies = ALL_CURRENCIES.filter((c) => !existingCurrencies.has(c));
+
+  const walletOpenedTrackedRef = useRef(false);
+  useEffect(() => {
+    if (walletsLoading || walletOpenedTrackedRef.current) return;
+    walletOpenedTrackedRef.current = true;
+    trackWalletOpened({ currency: activeWallet?.currency });
+  }, [walletsLoading, activeWallet?.currency]);
 
   return (
     <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-6 sm:space-y-8">

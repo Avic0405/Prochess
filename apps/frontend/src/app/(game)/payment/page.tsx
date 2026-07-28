@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Script from 'next/script';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,6 +20,7 @@ import { useToast } from '@/hooks/useToast';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { Currency } from '@/types';
+import { trackAddMoney, trackPaymentStarted, trackPaymentSuccess, trackPaymentFailed } from '@/lib/analytics/events';
 
 const STRIPE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '';
 const stripeConfigured =
@@ -65,6 +66,13 @@ export default function PaymentPage() {
   const activeCurrency: Currency = selectedCurrency ?? defaultCurrency;
   const gateway = GATEWAY_FOR[activeCurrency] ?? 'stripe';
   const paymentReady = gateway === 'razorpay' ? razorpayConfigured : stripeConfigured;
+
+  const addMoneyTrackedRef = useRef<Currency | null>(null);
+  useEffect(() => {
+    if (addMoneyTrackedRef.current === activeCurrency) return;
+    addMoneyTrackedRef.current = activeCurrency;
+    trackAddMoney({ currency: activeCurrency });
+  }, [activeCurrency]);
 
   const onSuccess = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['wallets'] });
@@ -170,6 +178,7 @@ function RazorpayDeposit({
     }
 
     setLoading(true);
+    trackPaymentStarted({ amount: parsed, currency: 'INR', gateway: 'razorpay' });
     try {
       const { data } = await api.post('/payments/razorpay/create-order', {
         amount: parsed,
@@ -191,6 +200,12 @@ function RazorpayDeposit({
             });
             setStatus('success');
             onSuccess();
+            trackPaymentSuccess({
+              amount: parsed,
+              currency: 'INR',
+              gateway: 'razorpay',
+              transactionId: response.razorpay_payment_id,
+            });
             toast({
               title: 'Payment successful!',
               description: `₹${parsed.toFixed(2)} added to your wallet`,
@@ -198,6 +213,12 @@ function RazorpayDeposit({
             setTimeout(() => router.push('/wallet'), 1500);
           } catch (err: any) {
             setStatus('failed');
+            trackPaymentFailed({
+              amount: parsed,
+              currency: 'INR',
+              gateway: 'razorpay',
+              reason: err?.response?.data?.message ?? 'verification_failed',
+            });
             toast({
               variant: 'destructive',
               title: 'Verification failed',
@@ -222,6 +243,12 @@ function RazorpayDeposit({
       const rzp = new (window as any).Razorpay(rzpOptions);
       rzp.on('payment.failed', (response: any) => {
         setStatus('failed');
+        trackPaymentFailed({
+          amount: parsed,
+          currency: 'INR',
+          gateway: 'razorpay',
+          reason: response?.error?.description ?? 'payment_failed',
+        });
         toast({
           variant: 'destructive',
           title: 'Payment failed',
@@ -231,6 +258,12 @@ function RazorpayDeposit({
       rzp.open();
     } catch (e: any) {
       setLoading(false);
+      trackPaymentFailed({
+        amount: parsed,
+        currency: 'INR',
+        gateway: 'razorpay',
+        reason: e?.response?.data?.message ?? 'order_creation_failed',
+      });
       toast({ variant: 'destructive', title: e?.response?.data?.message ?? 'Could not create order' });
     }
   };
@@ -323,17 +356,25 @@ function StripeDeposit({
   const { toast } = useToast();
 
   const initiatePayment = async () => {
-    if (!amount || parseFloat(amount) < 1) {
+    const parsed = parseFloat(amount);
+    if (!amount || parsed < 1) {
       toast({ variant: 'destructive', title: 'Enter a valid amount (min $1)' });
       return;
     }
     setLoading(true);
+    trackPaymentStarted({ amount: parsed, currency, gateway: 'stripe' });
     try {
       const { data } = await api.post('/payments/stripe/create-intent', {
-        amount: parseFloat(amount),
+        amount: parsed,
       });
       setClientSecret(data.clientSecret);
     } catch (e: any) {
+      trackPaymentFailed({
+        amount: parsed,
+        currency,
+        gateway: 'stripe',
+        reason: e?.response?.data?.message ?? 'intent_creation_failed',
+      });
       toast({ variant: 'destructive', title: e?.response?.data?.message ?? 'Error' });
     } finally {
       setLoading(false);
@@ -382,16 +423,18 @@ function StripeDeposit({
 
   return (
     <Elements stripe={stripePromise} options={{ clientSecret }}>
-      <StripePaymentForm amount={parseFloat(amount)} onSuccess={onSuccess} />
+      <StripePaymentForm amount={parseFloat(amount)} currency={currency} onSuccess={onSuccess} />
     </Elements>
   );
 }
 
 function StripePaymentForm({
   amount,
+  currency,
   onSuccess,
 }: {
   amount: number;
+  currency: Currency;
   onSuccess: () => void;
 }) {
   const stripe = useStripe();
@@ -405,17 +448,24 @@ function StripePaymentForm({
     if (!stripe || !elements) return;
 
     setLoading(true);
-    const { error } = await stripe.confirmPayment({
+    const { error, paymentIntent } = await stripe.confirmPayment({
       elements,
       confirmParams: { return_url: `${window.location.origin}/payment/success` },
       redirect: 'if_required',
     });
 
     if (error) {
+      trackPaymentFailed({ amount, currency, gateway: 'stripe', reason: error.message ?? 'card_error' });
       toast({ variant: 'destructive', title: error.message });
       setLoading(false);
     } else {
       onSuccess();
+      trackPaymentSuccess({
+        amount,
+        currency,
+        gateway: 'stripe',
+        transactionId: paymentIntent?.id ?? `stripe_${amount}`,
+      });
       toast({ title: 'Payment successful!', description: `$${amount} added to your wallet` });
       router.push('/wallet');
     }

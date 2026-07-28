@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import {
   User, Lock, Globe, Eye, EyeOff, Check, ChevronRight,
 } from 'lucide-react';
+import { trackProfileUpdated, trackSettingsChanged } from '@/lib/analytics/events';
 
 function SectionCard({
   icon: Icon,
@@ -101,6 +102,11 @@ export default function SettingsPage() {
     try {
       const { data } = await api.put('/users/me', { username, region });
       updateUser({ username: data.username, region: data.region });
+      const changedFields = [
+        username !== user?.username ? 'username' : null,
+        region !== user?.region ? 'region' : null,
+      ].filter((f): f is string => f !== null);
+      trackProfileUpdated({ fields: changedFields });
       toast({ title: 'Profile updated!' });
     } catch (e: any) {
       toast({ variant: 'destructive', title: e?.response?.data?.message ?? 'Failed to update profile' });
@@ -125,6 +131,7 @@ export default function SettingsPage() {
     setSavingPw(true);
     try {
       await api.post('/auth/change-password', { currentPassword: currentPw, newPassword: newPw });
+      trackSettingsChanged({ setting: 'password' });
       toast({ title: 'Password changed successfully!' });
       setCurrentPw('');
       setNewPw('');

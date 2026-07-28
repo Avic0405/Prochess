@@ -4,6 +4,7 @@ import { useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
 import { useAuthStore } from '@/store/authStore';
+import { trackGoogleLogin, trackLogin } from '@/lib/analytics/events';
 
 function OAuthSuccessInner() {
   const searchParams = useSearchParams();
@@ -13,6 +14,7 @@ function OAuthSuccessInner() {
     const token = searchParams.get('token');
     const refreshToken = searchParams.get('refreshToken');
     const error = searchParams.get('error');
+    const provider = searchParams.get('provider');
 
     if (error) {
       router.replace(`/login?error=${error}`);
@@ -36,6 +38,12 @@ function OAuthSuccessInner() {
         .getState()
         .fetchMe()
         .then(() => {
+          const userId = useAuthStore.getState().user?.id;
+          if (provider === 'google') {
+            trackGoogleLogin({ userId });
+          } else {
+            trackLogin({ method: 'facebook', userId });
+          }
           router.replace('/dashboard');
         })
         .catch(() => {

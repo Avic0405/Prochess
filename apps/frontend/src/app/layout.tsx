@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { ThemeProvider } from 'next-themes';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { AuthProvider } from '@/components/providers/AuthProvider';
+import { AnalyticsProvider } from '@/components/providers/AnalyticsProvider';
 import { Toaster } from '@/components/ui/Toaster';
 import '@/styles/globals.css';
 
@@ -102,6 +103,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
+        <AnalyticsProvider />
         <ThemeProvider attribute="class" defaultTheme="dark" disableTransitionOnChange>
           <QueryProvider>
             <AuthProvider>

@@ -13,6 +13,7 @@ import { cn, formatCurrency } from '@/lib/utils';
 import { Swords, DollarSign, Clock, Zap, Search, X, UserCheck, ChevronDown } from 'lucide-react';
 import { toast } from '@/hooks/useToast';
 import { Currency } from '@/types';
+import { trackStartMatchmaking, trackMatchFound, trackFriendInvite } from '@/lib/analytics/events';
 
 const TIME_CONTROLS = [
   { label: 'Bullet', value: 1, increment: 0, icon: Zap },
@@ -84,11 +85,13 @@ function LobbyContent() {
 
     socket.on('match_found', (data: { game: { id: string } }) => {
       setStatus('found');
+      trackMatchFound({ gameId: data.game.id, viaInvite: false });
       setTimeout(() => router.push(`/game/${data.game.id}`), 1500);
     });
 
     socket.on('invite_accepted', (data: { game: { id: string } }) => {
       setStatus('found');
+      trackMatchFound({ gameId: data.game.id, viaInvite: true });
       setTimeout(() => router.push(`/game/${data.game.id}`), 1500);
     });
 
@@ -166,6 +169,13 @@ function LobbyContent() {
     if (!socket) return;
 
     socket.emit('join_queue', buildOptions());
+    trackStartMatchmaking({
+      gameType,
+      timeMinutes: tc.value,
+      increment: tc.increment,
+      stake: gameType === 'PAID' ? parseFloat(stake) : undefined,
+      currency: gameType === 'PAID' ? activeCurrency : undefined,
+    });
     setStatus('searching');
   };
 
@@ -177,6 +187,7 @@ function LobbyContent() {
     if (!socket) return;
 
     socket.emit('invite_friend', { inviteeId: inviteUserId, ...buildOptions() });
+    trackFriendInvite({ inviteeId: inviteUserId, gameType });
     setStatus('inviting');
   };
 

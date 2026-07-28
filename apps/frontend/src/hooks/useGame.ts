@@ -5,12 +5,15 @@ import { Socket } from 'socket.io-client';
 import { useGameStore } from '@/store/gameStore';
 import { getGameSocket } from '@/lib/socket';
 import Cookies from 'js-cookie';
+import { trackGameStarted, trackGameFinished, trackGameAbandoned } from '@/lib/analytics/events';
 
 export type RematchState = 'idle' | 'pending' | 'incoming';
 
 export function useGame(gameId: string) {
   const socketRef = useRef<Socket | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const startedTrackedRef = useRef(false);
+  const finishedTrackedRef = useRef(false);
   const [rematchState, setRematchState] = useState<RematchState>('idle');
   const [rematchRequesterId, setRematchRequesterId] = useState<string | null>(null);
   const {
@@ -22,6 +25,25 @@ export function useGame(gameId: string) {
   useEffect(() => {
     const token = Cookies.get('accessToken');
     if (!token || !gameId) return;
+
+    startedTrackedRef.current = false;
+    finishedTrackedRef.current = false;
+
+    const trackFinishOrAbandon = (result: string, reason?: string) => {
+      if (finishedTrackedRef.current) return;
+      finishedTrackedRef.current = true;
+      if (reason === 'disconnect') {
+        trackGameAbandoned({ gameId, reason });
+        return;
+      }
+      const { playerColor } = useGameStore.getState();
+      const won =
+        result === 'DRAW' || result === 'ABANDONED'
+          ? null
+          : (result === 'WHITE_WINS' && playerColor === 'white') ||
+            (result === 'BLACK_WINS' && playerColor === 'black');
+      trackGameFinished({ gameId, result, reason, won });
+    };
 
     const socket = getGameSocket(token);
     socketRef.current = socket;
@@ -37,6 +59,17 @@ export function useGame(gameId: string) {
       }
       if (colorData) {
         useGameStore.getState().setPlayerColor(colorData as 'white' | 'black');
+      }
+      // colorData is only sent for actual players, never spectators
+      if (gameData && colorData && gameData.status === 'ACTIVE' && !startedTrackedRef.current) {
+        startedTrackedRef.current = true;
+        trackGameStarted({
+          gameId,
+          gameType: gameData.type,
+          timeMinutes: gameData.timeMinutes,
+          stake: gameData.stake,
+          currency: gameData.currency,
+        });
       }
     });
 
@@ -68,6 +101,7 @@ export function useGame(gameId: string) {
       // If move resulted in game completion, trigger game over immediately
       if (newStatus === 'COMPLETED' && data.result) {
         useGameStore.getState().endGame(data.result, data.reason ?? 'normal');
+        trackFinishOrAbandon(data.result, data.reason ?? 'normal');
         if (timerRef.current) clearInterval(timerRef.current);
       }
     });
@@ -82,6 +116,7 @@ export function useGame(gameId: string) {
 
     socket.on('game_over', (data: { result: string; reason?: string }) => {
       useGameStore.getState().endGame(data.result, data.reason);
+      trackFinishOrAbandon(data.result, data.reason);
       if (timerRef.current) clearInterval(timerRef.current);
     });
 

@@ -1,16 +1,22 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { getRatingColor } from '@/lib/utils';
 import { Trophy, Medal } from 'lucide-react';
+import { trackLeaderboardViewed } from '@/lib/analytics/events';
 
 export default function LeaderboardPage() {
   const { data: players, isLoading } = useQuery({
     queryKey: ['leaderboard'],
     queryFn: () => api.get('/users/leaderboard?limit=100').then((r) => r.data),
   });
+
+  useEffect(() => {
+    trackLeaderboardViewed();
+  }, []);
 
   return (
     <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-6">

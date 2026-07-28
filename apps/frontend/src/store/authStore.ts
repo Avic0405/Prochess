@@ -4,6 +4,7 @@ import Cookies from 'js-cookie';
 import api from '@/lib/api';
 import { User } from '@/types';
 import { disconnectAll } from '@/lib/socket';
+import { trackLogin, trackLogout, trackRegistration } from '@/lib/analytics/events';
 
 interface AuthState {
   user: User | null;
@@ -44,6 +45,7 @@ export const useAuthStore = create<AuthState>()(
             accessToken: data.accessToken,
             isAuthenticated: true,
           });
+          trackLogin({ method: 'email', userId: data.user?.id });
         } finally {
           set({ isLoading: false });
         }
@@ -62,6 +64,8 @@ export const useAuthStore = create<AuthState>()(
           Cookies.set('accessToken', data.accessToken, { expires: 1 / 96, secure: isSecure, sameSite: 'lax' });
           Cookies.set('refreshToken', data.refreshToken, { expires: 7, secure: isSecure, sameSite: 'lax' });
           set({ user: data.user, accessToken: data.accessToken, isAuthenticated: true });
+          // OTP verification is the moment the account actually becomes active — the real "registration complete" event.
+          trackRegistration({ userId: data.user?.id });
         } finally {
           set({ isLoading: false });
         }
@@ -73,6 +77,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: async () => {
+        trackLogout();
         try {
           await api.post('/auth/logout');
         } catch {}

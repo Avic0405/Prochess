@@ -162,7 +162,7 @@ export class AuthController {
   googleCallback(@Req() req: Request, @Res() res: Response) {
     const user = req.user as { accessToken: string; refreshToken: string };
     const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
-    const params = new URLSearchParams({ token: user.accessToken, refreshToken: user.refreshToken ?? '' });
+    const params = new URLSearchParams({ token: user.accessToken, refreshToken: user.refreshToken ?? '', provider: 'google' });
     res.redirect(`${appUrl}/oauth-success?${params.toString()}`);
   }
 
@@ -189,7 +189,7 @@ export class AuthController {
   facebookCallback(@Req() req: Request, @Res() res: Response) {
     const user = req.user as { accessToken: string; refreshToken: string };
     const appUrl = this.configService.get<string>('appUrl', 'http://localhost:3000');
-    const params = new URLSearchParams({ token: user.accessToken, refreshToken: user.refreshToken ?? '' });
+    const params = new URLSearchParams({ token: user.accessToken, refreshToken: user.refreshToken ?? '', provider: 'facebook' });
     res.redirect(`${appUrl}/oauth-success?${params.toString()}`);
   }
 
