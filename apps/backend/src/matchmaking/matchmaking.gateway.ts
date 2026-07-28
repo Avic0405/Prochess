@@ -13,7 +13,6 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Logger, Inject } from '@nestjs/common';
-import { createAdapter } from '@socket.io/redis-adapter';
 import { MatchmakingService } from './matchmaking.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import Redis from 'ioredis';
@@ -43,11 +42,8 @@ export class MatchmakingGateway
     @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
-  afterInit(server: Server) {
-    const pub = this.redis.duplicate();
-    const sub = this.redis.duplicate();
-    server.adapter(createAdapter(pub, sub));
-    this.logger.log('✓ Matchmaking WS Gateway initialized (Redis adapter)');
+  afterInit() {
+    this.logger.log('✓ Matchmaking WS Gateway initialized');
 
     // Re-poll all queues every 30 s to catch unmatched players
     setInterval(async () => {

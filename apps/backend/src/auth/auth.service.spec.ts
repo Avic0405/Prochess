@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import { WalletService } from '../wallet/wallet.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 
 const mockPrisma = {
@@ -16,6 +17,13 @@ const mockPrisma = {
   },
   wallet: { create: jest.fn() },
   $transaction: jest.fn(),
+};
+
+const mockRedis = {
+  get: jest.fn(),
+  set: jest.fn(),
+  setex: jest.fn(),
+  del: jest.fn(),
 };
 
 describe('AuthService', () => {
@@ -30,6 +38,7 @@ describe('AuthService', () => {
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('test-secret') } },
         { provide: MailService, useValue: { sendVerificationEmail: jest.fn() } },
         { provide: WalletService, useValue: { getOrCreateWallet: jest.fn() } },
+        { provide: REDIS_CLIENT, useValue: mockRedis },
       ],
     }).compile();
 

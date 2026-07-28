@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import Stripe from 'stripe';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const Razorpay = require('razorpay');
 import { createHmac } from 'crypto';
 import { Currency } from '@prisma/client';

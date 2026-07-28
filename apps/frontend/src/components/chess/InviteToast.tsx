@@ -180,7 +180,7 @@ export function InviteToast() {
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <p>
               This friend is using <strong>{CURRENCY_FLAGS[inviteCurrency!]} {inviteCurrency}</strong>.
-              You don't have a {inviteCurrency} wallet. Go to Wallet to create one first.
+              You don&apos;t have a {inviteCurrency} wallet. Go to Wallet to create one first.
             </p>
           </div>
         )}

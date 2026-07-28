@@ -13,7 +13,6 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Logger, Inject } from '@nestjs/common';
-import { createAdapter } from '@socket.io/redis-adapter';
 import { GamesService } from './games.service';
 import { GameStateService } from './game-state.service';
 import { UsersService } from '../users/users.service';
@@ -51,11 +50,8 @@ export class GamesGateway
     @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
-  afterInit(server: Server) {
-    const pub = this.redis.duplicate();
-    const sub = this.redis.duplicate();
-    server.adapter(createAdapter(pub, sub));
-    this.logger.log('✓ Game WS Gateway initialized (Redis adapter)');
+  afterInit() {
+    this.logger.log('✓ Game WS Gateway initialized');
   }
 
   async handleConnection(client: AuthenticatedSocket) {

@@ -10,6 +10,8 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { createLogger } from './common/logger/winston.logger';
+import { RedisIoAdapter } from './redis/redis-io.adapter';
+import { REDIS_CLIENT } from './redis/redis.module';
 
 async function bootstrap() {
   const logger = createLogger('Bootstrap');
@@ -36,7 +38,7 @@ async function bootstrap() {
       contentSecurityPolicy: nodeEnv === 'production',
     }),
   );
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   app.use(require('cookie-parser')());
 
   // CORS — supports comma-separated list in CORS_ORIGINS env var
@@ -69,6 +71,10 @@ async function bootstrap() {
   );
 
   app.setGlobalPrefix('api/v1', { exclude: ['health'] });
+
+  // Set up the Redis-backed Socket.IO adapter once, on the root server, before
+  // any @WebSocketGateway namespace attaches to it (see redis-io.adapter.ts).
+  app.useWebSocketAdapter(new RedisIoAdapter(app.get(REDIS_CLIENT)));
 
   if (nodeEnv !== 'production') {
     const swaggerConfig = new DocumentBuilder()

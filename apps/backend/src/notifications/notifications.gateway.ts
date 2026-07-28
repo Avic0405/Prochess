@@ -9,7 +9,6 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Logger, Inject } from '@nestjs/common';
-import { createAdapter } from '@socket.io/redis-adapter';
 import { PrismaService } from '../prisma/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import Redis from 'ioredis';
@@ -39,11 +38,8 @@ export class NotificationsGateway
     @Inject(REDIS_CLIENT) private redis: Redis,
   ) {}
 
-  afterInit(server: Server) {
-    const pub = this.redis.duplicate();
-    const sub = this.redis.duplicate();
-    server.adapter(createAdapter(pub, sub));
-    this.logger.log('✓ Notifications WS Gateway initialized (Redis adapter)');
+  afterInit() {
+    this.logger.log('✓ Notifications WS Gateway initialized');
   }
 
   async handleConnection(client: AuthenticatedSocket) {

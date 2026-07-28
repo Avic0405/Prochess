@@ -16,7 +16,6 @@ import * as argon2 from 'argon2';
 import { randomBytes, createHash, randomInt, createCipheriv, createDecipheriv } from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { Currency } from '@prisma/client';
 import { REDIS_CLIENT } from '../redis/redis.module';
 
 interface OAuthUserData {
