@@ -65,7 +65,9 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
   const finishedTrackedRef = useRef(false);
   const [botThinking, setBotThinking] = useState(false);
 
-  const { setGame, setPlayerColor, addMove, endGame, setLastMove, resetGame } = useGameStore();
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const { game, isGameOver, setGame, setPlayerColor, addMove, endGame, setLastMove, resetGame, decrementTimer } =
+    useGameStore();
 
   const startNewGame = useCallback(() => {
     resetGame();
@@ -160,6 +162,27 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
     },
     [botLevel.id, endGame],
   );
+
+  // Client-side timer — same pattern as useGame.ts, plus timeout enforcement
+  // (which useGame.ts leaves to the server; there's no server here).
+  useEffect(() => {
+    if (!game || game.status !== 'ACTIVE' || isGameOver) return;
+
+    timerRef.current = setInterval(() => {
+      decrementTimer();
+      const { whiteTime, blackTime, game: currentGame } = useGameStore.getState();
+      if (!currentGame) return;
+      if (currentGame.currentTurn === 'w' && whiteTime <= 0) {
+        void finishGame('LOSS', 'timeout');
+      } else if (currentGame.currentTurn === 'b' && blackTime <= 0) {
+        void finishGame('WIN', 'timeout');
+      }
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [game?.status, isGameOver, decrementTimer, finishGame]);
 
   const checkGameOver = useCallback((): boolean => {
     const chess = chessRef.current;

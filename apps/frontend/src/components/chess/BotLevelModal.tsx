@@ -117,7 +117,7 @@ export function BotLevelModal({ open, onOpenChange }: BotLevelModalProps) {
                       <Trophy className="w-3 h-3" /> ~{lvl.elo}
                     </p>
                     <p className="text-xs text-muted-foreground mt-2 min-h-[2rem]">
-                      {lvl.isUnlocked ? lvl.description : `Defeat the previous level to unlock`}
+                      {lvl.description}
                     </p>
 
                     {lvl.isUnlocked ? (
