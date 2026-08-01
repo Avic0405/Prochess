@@ -74,7 +74,7 @@ async function bootstrap() {
 
   // Set up the Redis-backed Socket.IO adapter once, on the root server, before
   // any @WebSocketGateway namespace attaches to it (see redis-io.adapter.ts).
-  app.useWebSocketAdapter(new RedisIoAdapter(app.get(REDIS_CLIENT)));
+  app.useWebSocketAdapter(new RedisIoAdapter(app, app.get(REDIS_CLIENT)));
 
   if (nodeEnv !== 'production') {
     const swaggerConfig = new DocumentBuilder()
