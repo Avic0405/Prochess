@@ -6,6 +6,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { GamesModule } from './games/games.module';
+import { BotModule } from './bot/bot.module';
 import { MatchmakingModule } from './matchmaking/matchmaking.module';
 import { PaymentsModule } from './payments/payments.module';
 import { WalletModule } from './wallet/wallet.module';
@@ -34,6 +35,7 @@ import configuration from './config/configuration';
     AuthModule,
     UsersModule,
     GamesModule,
+    BotModule,
     MatchmakingModule,
     PaymentsModule,
     WalletModule,

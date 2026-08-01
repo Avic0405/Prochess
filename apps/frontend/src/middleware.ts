@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 const PROTECTED_PREFIXES = [
-  '/dashboard', '/game', '/lobby', '/profile', '/admin',
+  '/dashboard', '/game', '/lobby', '/profile', '/admin', '/bot',
   '/payment', '/friends', '/wallet', '/history', '/leaderboard', '/settings',
 ];
 

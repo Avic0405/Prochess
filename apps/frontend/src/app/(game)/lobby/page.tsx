@@ -9,8 +9,9 @@ import Cookies from 'js-cookie';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { BotLevelModal } from '@/components/chess/BotLevelModal';
 import { cn, formatCurrency } from '@/lib/utils';
-import { Swords, DollarSign, Clock, Zap, Search, X, UserCheck, ChevronDown } from 'lucide-react';
+import { Swords, DollarSign, Clock, Zap, Search, X, UserCheck, ChevronDown, Bot } from 'lucide-react';
 import { toast } from '@/hooks/useToast';
 import { Currency } from '@/types';
 import { trackStartMatchmaking, trackMatchFound, trackFriendInvite } from '@/lib/analytics/events';
@@ -42,6 +43,7 @@ function LobbyContent() {
   const [searchTime, setSearchTime] = useState(0);
   const [activeInviteId, setActiveInviteId] = useState<string | null>(null);
   const [selectedCurrency, setSelectedCurrency] = useState<Currency | null>(null);
+  const [botModalOpen, setBotModalOpen] = useState(false);
 
   const { data: wallets = [] } = useQuery<any[]>({
     queryKey: ['wallets'],
@@ -234,7 +236,7 @@ function LobbyContent() {
         </div>
 
         {/* Game type selector */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 xs:grid-cols-3 gap-3">
           {(['FREE', 'PAID'] as const).map((type) => (
             <button
               key={type}
@@ -257,6 +259,20 @@ function LobbyContent() {
               </p>
             </button>
           ))}
+
+          {/* Independent of the FREE/PAID matchmaking flow above — opens the level-select
+              modal directly instead of touching gameType/buildOptions/the queue socket. */}
+          <button
+            onClick={() => setBotModalOpen(true)}
+            className="p-4 rounded-xl border-2 border-border hover:border-primary/50 transition-all text-left relative"
+          >
+            <span className="absolute top-2 right-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary/15 text-primary">
+              NEW
+            </span>
+            <Bot className="w-6 h-6 mb-2 text-primary" />
+            <p className="font-semibold">Play with Bot</p>
+            <p className="text-xs text-muted-foreground">Practice and improve</p>
+          </button>
         </div>
 
         {/* Time control */}
@@ -403,6 +419,8 @@ function LobbyContent() {
           </div>
         )}
       </div>
+
+      <BotLevelModal open={botModalOpen} onOpenChange={setBotModalOpen} />
     </div>
   );
 }

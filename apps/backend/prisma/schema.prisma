@@ -86,6 +86,13 @@ enum Currency {
   GBP
 }
 
+enum BotGameResult {
+  WIN
+  LOSS
+  DRAW
+  ABANDONED
+}
+
 model User {
   id            String    @id @default(cuid())
   email         String    @unique
@@ -131,6 +138,8 @@ model User {
   sentMessages       ChatMessage[]   @relation("MessageSender")
   ratingHistory      RatingHistory[]
   matchmakingEntry   MatchmakingQueue?
+  botProgress        UserBotProgress[]
+  botGameHistory     BotGameHistory[]
 
   @@index([username])
   @@index([email])
@@ -324,4 +333,51 @@ model PendingRegistration {
   updatedAt    DateTime @updatedAt
 
   @@index([email])
+}
+
+model BotLevel {
+  id          String   @id @default(cuid())
+  level       Int      @unique
+  name        String
+  elo         Int
+  description String
+  createdAt   DateTime @default(now())
+
+  progress UserBotProgress[]
+  history  BotGameHistory[]
+}
+
+model UserBotProgress {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botLevelId  String
+  botLevel    BotLevel  @relation(fields: [botLevelId], references: [id], onDelete: Cascade)
+  isUnlocked  Boolean   @default(false)
+  wins        Int       @default(0)
+  losses      Int       @default(0)
+  draws       Int       @default(0)
+  attempts    Int       @default(0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, botLevelId])
+  @@index([userId])
+}
+
+model BotGameHistory {
+  id         String        @id @default(cuid())
+  userId     String
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botLevelId String
+  botLevel   BotLevel      @relation(fields: [botLevelId], references: [id])
+  result     BotGameResult
+  pgn        String?
+  fen        String?
+  moveCount  Int           @default(0)
+  createdAt  DateTime      @default(now())
+
+  @@index([userId])
+  @@index([botLevelId])
 }

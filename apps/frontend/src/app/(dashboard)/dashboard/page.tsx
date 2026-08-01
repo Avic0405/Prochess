@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
@@ -8,11 +8,13 @@ import { useAuthStore } from '@/store/authStore';
 import api from '@/lib/api';
 import { formatCurrency, getRatingColor } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
-import { Trophy, Swords, Users, TrendingUp, Clock, DollarSign } from 'lucide-react';
+import { BotLevelModal } from '@/components/chess/BotLevelModal';
+import { Trophy, Swords, Users, TrendingUp, Clock, DollarSign, Bot } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, isAuthenticated, isHydrated } = useAuthStore();
+  const [botModalOpen, setBotModalOpen] = useState(false);
 
   useEffect(() => {
     if (isHydrated && !isAuthenticated) router.push('/login');
@@ -47,16 +49,25 @@ export default function DashboardPage() {
               Rating: {user.rating}
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Button asChild variant="outline" className="flex-1 sm:flex-none">
               <Link href="/lobby">Quick Match</Link>
             </Button>
             <Button asChild className="flex-1 sm:flex-none">
               <Link href="/lobby?type=paid">Paid Match</Link>
             </Button>
+            <Button
+              variant="secondary"
+              className="flex-1 sm:flex-none gap-1.5"
+              onClick={() => setBotModalOpen(true)}
+            >
+              <Bot className="w-4 h-4" /> Play with Bot
+            </Button>
           </div>
         </div>
       </div>
+
+      <BotLevelModal open={botModalOpen} onOpenChange={setBotModalOpen} />
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

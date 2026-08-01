@@ -61,6 +61,7 @@ export function trackGameStarted(params: {
   timeMinutes?: number;
   stake?: number;
   currency?: Currency;
+  mode?: 'online' | 'bot';
 }) {
   trackEvent('game_started', {
     game_id: params.gameId,
@@ -68,6 +69,7 @@ export function trackGameStarted(params: {
     time_control: params.timeMinutes,
     stake: params.stake,
     currency: params.currency,
+    mode: params.mode ?? 'online',
   });
 }
 
@@ -76,12 +78,14 @@ export function trackGameFinished(params: {
   result: string;
   reason?: string;
   won: boolean | null;
+  mode?: 'online' | 'bot';
 }) {
   trackEvent('game_finished', {
     game_id: params.gameId,
     result: params.result,
     reason: params.reason,
     won: params.won,
+    mode: params.mode ?? 'online',
   });
 }
 
@@ -91,6 +95,10 @@ export function trackGameAbandoned(params: { gameId: string; reason?: string }) 
 
 export function trackFriendInvite(params: { inviteeId: string; gameType: GameType }) {
   trackEvent('friend_invite', { invitee_id: params.inviteeId, game_type: params.gameType });
+}
+
+export function trackBotLevelSelected(params: { level: number; name: string; elo: number }) {
+  trackEvent('bot_level_selected', { level: params.level, name: params.name, elo: params.elo });
 }
 
 // ─── Wallet & Payments ──────────────────────────────────────────────────────
