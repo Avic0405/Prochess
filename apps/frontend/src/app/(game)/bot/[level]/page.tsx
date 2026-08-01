@@ -8,12 +8,12 @@ import { useAuthStore } from '@/store/authStore';
 import { useGameStore } from '@/store/gameStore';
 import { useBotGame, type BotLevelInfo } from '@/hooks/useBotGame';
 import { ChessBoard } from '@/components/chess/ChessBoard';
-import { GameTimer } from '@/components/chess/GameTimer';
 import { MoveHistory } from '@/components/chess/MoveHistory';
 import { MatchResultDialog } from '@/components/chess/MatchResultDialog';
 import { CapturedPieces } from '@/components/chess/CapturedPieces';
+import { PlayerBar } from '@/components/chess/PlayerBar';
 import { Button } from '@/components/ui/Button';
-import { Flag, FlipHorizontal, List, Loader2, Bot, Crown } from 'lucide-react';
+import { Flag, FlipHorizontal, List, Loader2, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface BotLevelDto {
@@ -88,7 +88,12 @@ function BotGameBoard({
   const router = useRouter();
   const { game, isGameOver, gameResult, gameOverReason, whiteTime, blackTime, lastMove } =
     useGameStore();
-  const { makeMove, resign, newGame, botThinking } = useBotGame(botLevel, userId, username, userRating);
+  const { makeMove, resign, newGame, botThinking, onPromotionPending } = useBotGame(
+    botLevel,
+    userId,
+    username,
+    userRating,
+  );
 
   const [boardFlipped, setBoardFlipped] = useState(false);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
@@ -120,33 +125,14 @@ function BotGameBoard({
           {/* ── Board Column ─────────────────────────────── */}
           <div className="w-full lg:flex-1 max-w-[600px] mx-auto lg:mx-0">
             {/* Bot player bar */}
-            <div
-              className={cn(
-                'flex items-center justify-between px-2 py-1.5 rounded-md transition-colors',
-                !isGameOver && game.currentTurn === 'b' ? 'bg-white/5' : '',
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center bg-gray-800 text-white border-2 border-gray-600 shrink-0">
-                  <Bot className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold truncate max-w-[160px]">
-                      {game.blackPlayer.username}
-                    </span>
-                    {botThinking && (
-                      <span className="text-[10px] text-primary animate-pulse">thinking…</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Crown className="w-3 h-3 text-yellow-500/60" />
-                    <span className="text-xs text-gray-500">{game.blackPlayer.rating}</span>
-                  </div>
-                </div>
-              </div>
-              <GameTimer seconds={blackTime} isActive={!isGameOver && game.currentTurn === 'b'} />
-            </div>
+            <PlayerBar
+              player={game.blackPlayer}
+              timeLeft={blackTime}
+              isActive={!isGameOver && game.currentTurn === 'b'}
+              color="black"
+              avatarIcon={<Bot className="w-4 h-4" />}
+              statusLabel={botThinking ? 'thinking…' : undefined}
+            />
 
             {game.fen && (
               <CapturedPieces fen={game.fen} color="black" className="px-2 py-0.5 min-h-[20px]" />
@@ -160,6 +146,7 @@ function BotGameBoard({
                 disabled={isGameOver || game.currentTurn !== 'w' || botThinking}
                 lastMove={lastMove}
                 boardFlipped={boardFlipped}
+                onPromotionPending={onPromotionPending}
               />
             </div>
 
@@ -168,29 +155,13 @@ function BotGameBoard({
             )}
 
             {/* My player bar */}
-            <div
-              className={cn(
-                'flex items-center justify-between px-2 py-1.5 rounded-md transition-colors',
-                !isGameOver && game.currentTurn === 'w' ? 'bg-white/5' : '',
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center bg-gray-100 text-gray-900 border-2 border-gray-400 shrink-0">
-                  {username[0]?.toUpperCase() ?? '?'}
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold truncate max-w-[140px]">{username}</span>
-                    <span className="text-[10px] text-gray-500 bg-white/5 px-1 rounded">you</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Crown className="w-3 h-3 text-yellow-500/60" />
-                    <span className="text-xs text-gray-500">{userRating}</span>
-                  </div>
-                </div>
-              </div>
-              <GameTimer seconds={whiteTime} isActive={!isGameOver && game.currentTurn === 'w'} />
-            </div>
+            <PlayerBar
+              player={{ username, rating: userRating }}
+              timeLeft={whiteTime}
+              isActive={!isGameOver && game.currentTurn === 'w'}
+              color="white"
+              isMe
+            />
 
             {/* Controls — Flip / Resign, always visible (no chat, no draw offers vs. a bot) */}
             <div className="flex items-center gap-2 mt-3 flex-wrap">

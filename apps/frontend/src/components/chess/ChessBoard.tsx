@@ -28,6 +28,10 @@ interface ChessBoardProps {
   lastMove?: { from: string; to: string } | null;
   boardFlipped?: boolean;
   silent?: boolean;
+  /** Fires whenever the promotion-piece picker opens/closes — lets a caller
+   * (e.g. bot mode's clock) pause while the player is mid-decision. Optional
+   * and unused by the online game page, so this has no effect there. */
+  onPromotionPending?: (pending: boolean) => void;
 }
 
 export function ChessBoard({
@@ -38,6 +42,7 @@ export function ChessBoard({
   lastMove,
   boardFlipped = false,
   silent = false,
+  onPromotionPending,
 }: ChessBoardProps) {
   // react-chessboard crashes if position is null/undefined — always use valid FEN
   const safeFen = (fen && fen.trim()) ? fen : STARTING_FEN;
@@ -45,6 +50,10 @@ export function ChessBoard({
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [legalSquares, setLegalSquares] = useState<Record<string, React.CSSProperties>>({});
   const [pendingPromotion, setPendingPromotion] = useState<{ from: Square; to: Square } | null>(null);
+
+  useEffect(() => {
+    onPromotionPending?.(!!pendingPromotion);
+  }, [pendingPromotion, onPromotionPending]);
 
   const chess = useMemo(() => {
     try {

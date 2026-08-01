@@ -8,11 +8,11 @@ import { useAuthStore } from '@/store/authStore';
 import { useGameStore } from '@/store/gameStore';
 import { useGame } from '@/hooks/useGame';
 import { ChessBoard } from '@/components/chess/ChessBoard';
-import { GameTimer } from '@/components/chess/GameTimer';
 import { MoveHistory } from '@/components/chess/MoveHistory';
 import { GameChat } from '@/components/chess/GameChat';
 import { MatchResultDialog } from '@/components/chess/MatchResultDialog';
 import { CapturedPieces } from '@/components/chess/CapturedPieces';
+import { PlayerBar } from '@/components/chess/PlayerBar';
 import { Button } from '@/components/ui/Button';
 import {
   Flag,
@@ -21,7 +21,6 @@ import {
   MessageSquare,
   List,
   Loader2,
-  Crown,
   Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -397,60 +396,6 @@ export default function GamePage() {
         onAcceptRematch={acceptRematch}
         rematchState={rematchState}
       />
-    </div>
-  );
-}
-
-/* ─── Player Bar ──────────────────────────────────────── */
-
-function PlayerBar({
-  player,
-  timeLeft,
-  isActive,
-  color,
-  isMe,
-}: {
-  player?: { id?: string; username: string; avatar?: string; rating: number };
-  timeLeft: number;
-  isActive: boolean;
-  color: 'white' | 'black';
-  isMe?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        'flex items-center justify-between px-2 py-1.5 rounded-md transition-colors',
-        isActive ? 'bg-white/5' : '',
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <div
-          className={cn(
-            'w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 shrink-0',
-            color === 'white'
-              ? 'bg-gray-100 text-gray-900 border-gray-400'
-              : 'bg-gray-800 text-white border-gray-600',
-          )}
-        >
-          {player?.username?.[0]?.toUpperCase() ?? '?'}
-        </div>
-        <div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-semibold truncate max-w-[140px]">
-              {player?.username ?? 'Connecting...'}
-            </span>
-            {isMe && (
-              <span className="text-[10px] text-gray-500 bg-white/5 px-1 rounded">you</span>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            <Crown className="w-3 h-3 text-yellow-500/60" />
-            <span className="text-xs text-gray-500">{player?.rating ?? '—'}</span>
-          </div>
-        </div>
-      </div>
-
-      <GameTimer seconds={timeLeft} isActive={isActive} />
     </div>
   );
 }

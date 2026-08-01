@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
+import Cookies from 'js-cookie';
 import { useGameStore } from '@/store/gameStore';
 import { StockfishEngine, movetimeForLevel } from '@/lib/stockfish';
 import api from '@/lib/api';
@@ -63,13 +64,24 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
   const engineRef = useRef<StockfishEngine | null>(null);
   const startedTrackedRef = useRef(false);
   const finishedTrackedRef = useRef(false);
+  // Bumped on every startNewGame() call. A pending bot reply captures the
+  // generation it was asked under; if a new game has started (or the engine
+  // was torn down) by the time the reply lands, it's discarded instead of
+  // being applied to the wrong position — and instead of leaving
+  // `botThinking` stuck true forever (the board would look permanently
+  // frozen), startNewGame() itself resets it for the new generation.
+  const gameGenerationRef = useRef(0);
   const [botThinking, setBotThinking] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const [promotionPending, setPromotionPending] = useState(false);
   const { game, isGameOver, setGame, setPlayerColor, addMove, endGame, setLastMove, resetGame, decrementTimer } =
     useGameStore();
 
   const startNewGame = useCallback(() => {
+    gameGenerationRef.current += 1;
+    setBotThinking(false);
+
     resetGame();
     chessRef.current = new Chess();
     finishedTrackedRef.current = false;
@@ -100,8 +112,57 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
     return () => {
       engineRef.current?.destroy();
       engineRef.current = null;
+
+      // Mid-game exit (navigating away without resigning) should still count
+      // as an attempt so a level's progress row never orphans silently.
+      const { game: currentGame, isGameOver: currentIsGameOver } = useGameStore.getState();
+      if (currentGame && !currentIsGameOver && currentGame.moveCount > 0 && !finishedTrackedRef.current) {
+        finishedTrackedRef.current = true;
+        api
+          .post('/bot/end', {
+            levelId: botLevel.id,
+            result: 'ABANDONED',
+            pgn: chessRef.current.pgn(),
+            fen: chessRef.current.fen(),
+            moveCount: currentGame.moveCount,
+          })
+          .catch(() => {});
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botLevel.id]);
+
+  // Covers closing/reloading the tab mid-game — the effect cleanup above only
+  // fires on in-app navigation, not a hard page unload. `sendBeacon` can't
+  // carry the Authorization header this API requires (JWT is bearer-token
+  // only, no cookie fallback — see jwt.strategy.ts), so `fetch(keepalive)` is
+  // used instead — it's the modern, header-capable equivalent for exactly
+  // this "one last request as the page goes away" case.
+  useEffect(() => {
+    const handleUnload = () => {
+      const { game: currentGame, isGameOver: currentIsGameOver } = useGameStore.getState();
+      if (currentGame && !currentIsGameOver && currentGame.moveCount > 0 && !finishedTrackedRef.current) {
+        finishedTrackedRef.current = true;
+        const token = Cookies.get('accessToken');
+        fetch(`${api.defaults.baseURL}/bot/end`, {
+          method: 'POST',
+          keepalive: true,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            levelId: botLevel.id,
+            result: 'ABANDONED',
+            pgn: chessRef.current.pgn(),
+            fen: chessRef.current.fen(),
+            moveCount: currentGame.moveCount,
+          }),
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
   }, [botLevel.id]);
 
   const recordMove = useCallback(
@@ -164,9 +225,11 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
   );
 
   // Client-side timer — same pattern as useGame.ts, plus timeout enforcement
-  // (which useGame.ts leaves to the server; there's no server here).
+  // (which useGame.ts leaves to the server; there's no server here) and a
+  // pause while the player is mid-promotion-choice (the move isn't final
+  // yet, so it shouldn't cost clock time the way normal thinking does).
   useEffect(() => {
-    if (!game || game.status !== 'ACTIVE' || isGameOver) return;
+    if (!game || game.status !== 'ACTIVE' || isGameOver || promotionPending) return;
 
     timerRef.current = setInterval(() => {
       decrementTimer();
@@ -182,7 +245,7 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [game?.status, isGameOver, decrementTimer, finishGame]);
+  }, [game?.status, isGameOver, promotionPending, decrementTimer, finishGame]);
 
   const checkGameOver = useCallback((): boolean => {
     const chess = chessRef.current;
@@ -191,19 +254,35 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
       // Side to move is the one in checkmate — if it's Black's turn, White (human) delivered mate.
       const humanWon = chess.turn() === 'b';
       void finishGame(humanWon ? 'WIN' : 'LOSS', 'checkmate');
+    } else if (chess.isStalemate()) {
+      void finishGame('DRAW', 'stalemate');
+    } else if (chess.isInsufficientMaterial()) {
+      void finishGame('DRAW', 'insufficient_material');
+    } else if (chess.isThreefoldRepetition()) {
+      void finishGame('DRAW', 'threefold_repetition');
+    } else if (chess.isDrawByFiftyMoves()) {
+      void finishGame('DRAW', 'fifty_move_rule');
     } else {
-      void finishGame('DRAW', chess.isStalemate() ? 'stalemate' : 'draw');
+      void finishGame('DRAW', 'draw');
     }
     return true;
   }, [finishGame]);
 
   const requestBotMove = useCallback(async () => {
     const engine = engineRef.current;
+    const generation = gameGenerationRef.current;
     if (!engine) return;
     setBotThinking(true);
     try {
       const uciMove = await engine.getBestMove(chessRef.current.fen(), movetimeForLevel(botLevel.level));
+
+      // A new game may have started (or the player resigned) while the
+      // engine was thinking — discard a stale reply instead of applying it
+      // to the wrong position.
+      if (generation !== gameGenerationRef.current) return;
+      if (useGameStore.getState().isGameOver) return;
       if (!uciMove || uciMove === '(none)') return;
+
       const from = uciMove.slice(0, 2);
       const to = uciMove.slice(2, 4);
       const promotion = uciMove.length > 4 ? uciMove.slice(4) : undefined;
@@ -217,7 +296,7 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
       recordMove(move, chessRef.current.fen());
       checkGameOver();
     } finally {
-      setBotThinking(false);
+      if (generation === gameGenerationRef.current) setBotThinking(false);
     }
   }, [botLevel.level, recordMove, checkGameOver]);
 
@@ -246,5 +325,5 @@ export function useBotGame(botLevel: BotLevelInfo, userId: string, username: str
     void finishGame('LOSS', 'resignation');
   }, [finishGame]);
 
-  return { makeMove, resign, newGame: startNewGame, botThinking };
+  return { makeMove, resign, newGame: startNewGame, botThinking, onPromotionPending: setPromotionPending };
 }
